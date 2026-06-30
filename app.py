@@ -35,7 +35,7 @@ def init_db():
         print(f"[PCA] Warning: ClickHouse init failed: {e}")
 
 # Register blueprints
-from routes.pca_routes import pca_bp
+from controllers.pca_controller import pca_bp
 app.register_blueprint(pca_bp, url_prefix='/api')
 
 # Initialize on startup
