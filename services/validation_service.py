@@ -56,13 +56,21 @@ Analyze the transcript and assign one marking for each parameter: "Expert", "Int
    - Followed hold protocols? Explained wait time, sought permission, proper sign-back, no dead air >10 sec?
    - Expert (6), Intermediate (3), Novice (0), BI/CI (0), N/A (if hold not required)
 
+8. Good/Right Probing (Weight: 12)
+   - Did correct and relevant probing to understand customer query? Look for negative probing.
+   - Expert (12), Novice (0), BI/CI (0)
+
+9. Correct Closing (Weight: 6)
+   - Did agent close call with brand name and thank customer?
+   - Expert (6), Intermediate (3), Novice (0), BI/CI (0)
+
 --- BI/CI RULE ---
 "BI/CI" = Business/Customer Impact violation (extreme rudeness, policy violation, misinformation, data exposure).
 If ANY parameter is BI/CI, set `is_critical_escalation: true`.
 
 --- SCORING ---
 - Total = Sum of all scores
-- Max Possible = 36 (or 30 if parameter 7 is N/A)
+- Max Possible = 54 (or 48 if parameter 7 is N/A)
 - Percentage = (Total / Max) * 100
 - Skill Level: Expert (>=80%), Intermediate (50-79.9%), Novice (<50%)
 
@@ -76,8 +84,10 @@ Respond with ONLY valid JSON (no markdown):
     "grammar_vocabulary": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "..."},
     "apology_empathy": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "..."},
     "dead_air_hold_process": {"marking": "...|N/A", "score": 6.0|3.0|0.0, "evidence": "..."},
+    "good_right_probing": {"marking": "Expert|Novice|BI/CI", "score": 12.0|0.0, "evidence": "..."},
+    "correct_closing": {"marking": "Expert|Intermediate|Novice|BI/CI", "score": 6.0|3.0|0.0, "evidence": "..."},
     "total_earned_score": <sum>,
-    "max_possible_score": 36|30,
+    "max_possible_score": 54|48,
     "percentage": <calculated>,
     "skill_level": "Expert|Intermediate|Novice",
     "is_critical_escalation": true|false
@@ -179,8 +189,10 @@ def _get_empty_validation() -> Dict:
             "grammar_vocabulary": {"marking": "Novice", "score": 0.0, "evidence": "Analysis failed"},
             "apology_empathy": {"marking": "Novice", "score": 0.0, "evidence": "Analysis failed"},
             "dead_air_hold_process": {"marking": "N/A", "score": 0.0, "evidence": "Analysis failed"},
+            "good_right_probing": {"marking": "Novice", "score": 0.0, "evidence": "Analysis failed"},
+            "correct_closing": {"marking": "Novice", "score": 0.0, "evidence": "Analysis failed"},
             "total_earned_score": 0,
-            "max_possible_score": 30,
+            "max_possible_score": 48,
             "percentage": 0,
             "skill_level": "Novice",
             "is_critical_escalation": false
