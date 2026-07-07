@@ -117,7 +117,8 @@ class CallAnalytics:
                  agent_performance=None, summary="", topics=None, action_items=None,
                  key_indicators=None, call_matrices=None, customer_name=None,
                  hangup_reason=None, raw_model_response=None, model_id=None,
-                 created_on=None):
+                 validation_results=None, validation_score=None, validation_percentage=None,
+                 skill_level=None, created_on=None):
         self.call_id = call_id
         self.overall_sentiment = overall_sentiment
         self.customer_satisfaction = customer_satisfaction
@@ -131,10 +132,14 @@ class CallAnalytics:
         self.hangup_reason = hangup_reason
         self.raw_model_response = raw_model_response
         self.model_id = model_id
+        self.validation_results = validation_results
+        self.validation_score = validation_score
+        self.validation_percentage = validation_percentage
+        self.skill_level = skill_level
         self.created_on = created_on
 
     def to_dict(self):
-        return {
+        base_dict = {
             "overallSentiment": float(self.overall_sentiment) if self.overall_sentiment is not None else None,
             "customerSatisfaction": float(self.customer_satisfaction) if self.customer_satisfaction is not None else None,
             "agentPerformance": float(self.agent_performance) if self.agent_performance is not None else None,
@@ -146,6 +151,14 @@ class CallAnalytics:
             "customerName": self.customer_name,
             "hangupReason": self.hangup_reason,
         }
+        
+        if self.validation_results:
+            base_dict["validation"] = self.validation_results
+            base_dict["validationScore"] = float(self.validation_score) if self.validation_score else 0
+            base_dict["validationPercentage"] = float(self.validation_percentage) if self.validation_percentage else 0
+            base_dict["skillLevel"] = self.skill_level or "Novice"
+        
+        return base_dict
 
 
 # ── CRUD ─────────────────────────────────────────────────────────────────────
@@ -221,6 +234,23 @@ def upsert_record(record: CallRecord):
 
 def _row_to_analytics(row):
     d = dict(zip(_ANALYTICS_SELECT, row))
+    
+    # Parse raw_model_response which may contain validation data
+    raw_response = json.loads(d["raw_model_response"]) if d["raw_model_response"] else {}
+    
+    # Extract validation data if present
+    validation_data = raw_response.get("validation", {})
+    validation_results = validation_data.get("results")
+    validation_score = validation_data.get("score")
+    validation_percentage = validation_data.get("percentage")
+    skill_level = validation_data.get("skill_level")
+    
+    # Remove validation from raw_response to keep it clean for original sentiment analysis
+    if "validation" in raw_response:
+        raw_response_without_validation = {k: v for k, v in raw_response.items() if k != "validation"}
+    else:
+        raw_response_without_validation = raw_response
+    
     return CallAnalytics(
         call_id=d["call_id"],
         overall_sentiment=d["overall_sentiment"],
@@ -233,8 +263,12 @@ def _row_to_analytics(row):
         call_matrices=json.loads(d["call_matrices"]) if d["call_matrices"] else {},
         customer_name=d["customer_name"],
         hangup_reason=d["hangup_reason"],
-        raw_model_response=json.loads(d["raw_model_response"]) if d["raw_model_response"] else None,
+        raw_model_response=raw_response_without_validation if raw_response_without_validation else None,
         model_id=d["model_id"],
+        validation_results=validation_results,
+        validation_score=validation_score,
+        validation_percentage=validation_percentage,
+        skill_level=skill_level,
         created_on=d["created_on"],
     )
 
@@ -279,6 +313,20 @@ def get_analytics_map(call_ids):
 
 def upsert_analytics(a: CallAnalytics):
     """Insert (or replace) an analytics row"""
+    # Combine raw_model_response with validation in a single JSON
+    combined_response = {}
+    if a.raw_model_response:
+        combined_response = a.raw_model_response.copy() if isinstance(a.raw_model_response, dict) else {}
+    
+    # Add validation data to the combined response
+    if a.validation_results:
+        combined_response["validation"] = {
+            "results": a.validation_results,
+            "score": a.validation_score,
+            "percentage": a.validation_percentage,
+            "skill_level": a.skill_level
+        }
+    
     row = [
         a.call_id,
         a.overall_sentiment,
@@ -291,7 +339,7 @@ def upsert_analytics(a: CallAnalytics):
         json.dumps(a.call_matrices or {}),
         a.customer_name,
         a.hangup_reason,
-        json.dumps(a.raw_model_response) if a.raw_model_response else "",
+        json.dumps(combined_response) if combined_response else "",
         a.model_id or "",
         a.created_on or _now(),
         _now(),

@@ -12,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import clickhouse_integration as ch
 from clickhouse_integration import CallRecord, CallAnalytics
+from services import validation_service
 
 RECORDINGS_BUCKET = os.environ.get("S3_RECORDINGS_BUCKET", "sahaa-voiceai-recordings")
 PCA_MODEL_ID = os.environ.get("PCA_MODEL_ID", "global.anthropic.claude-haiku-4-5-20251001-v1:0")
@@ -56,15 +57,21 @@ def format_transcript(messages):
 
 def _messages_to_turns(messages, started_at=None):
     """Convert messages to frontend transcript format"""
-    base = _parse_iso(started_at)
     turns = []
     for msg in messages or []:
         role = msg.get("role")
         speaker_type = "user" if role == "user" else "agent"
-        ts = _parse_iso(msg.get("timestamp"))
-        if base and ts:
-            delta = max(0, int((ts - base).total_seconds()))
-            stamp = f"{delta // 60:02d}:{delta % 60:02d}"
+        
+        # Use the pre-formatted timestamp if available (from transcribe_service)
+        # Otherwise fall back to calculating from start_time
+        if 'timestamp' in msg and isinstance(msg['timestamp'], str) and ':' in msg['timestamp']:
+            stamp = msg['timestamp']
+        elif 'start_time' in msg:
+            # Calculate from start_time in seconds
+            start_seconds = float(msg['start_time'])
+            minutes = int(start_seconds // 60)
+            seconds = int(start_seconds % 60)
+            stamp = f"{minutes:02d}:{seconds:02d}"
         else:
             stamp = "00:00"
         turns.append({
@@ -101,8 +108,28 @@ The JSON must have exactly these keys:
   }
 }
 
-Scores are on a 0-10 scale (10 = best). Base them strictly on the transcript.
-For call_matrices, extract the requested information from the conversation; use "N/A" if not mentioned."""
+SCORING GUIDELINES (0-10 scale, where 10 = best):
+
+**overall_sentiment**: Rate the overall tone and emotional quality of the call
+- 8-10: Positive, friendly, cooperative atmosphere throughout
+- 5-7: Neutral or mixed emotions, some tension but generally professional
+- 2-4: Negative tone, frustration, complaints, or dissatisfaction evident
+- 0-1: Highly negative, angry, hostile interaction
+
+**customer_satisfaction**: Rate how satisfied the customer appears to be
+- 8-10: Customer expresses clear satisfaction, thanks agent, issue fully resolved
+- 5-7: Customer accepts the outcome, no strong positive/negative signals
+- 2-4: Customer expresses frustration, dissatisfaction, or unresolved concerns
+- 0-1: Customer is very unhappy, threatens to escalate, or explicitly dissatisfied
+
+**agent_performance**: Rate the agent's effectiveness and professionalism
+- 8-10: Excellent communication, empathy, problem-solving, professional throughout
+- 5-7: Adequate performance, handles basic tasks but may lack polish or efficiency
+- 2-4: Poor communication, lacks empathy, struggles to help, unprofessional moments
+- 0-1: Very poor performance, rude, unable to assist, or major errors
+
+Be realistic with scores. A typical successful call should score 6-8, not perfect 10s.
+Base all ratings strictly on evidence from the transcript provided."""
 
 
 def _invoke_bedrock_analysis(conversation_text):
@@ -176,7 +203,7 @@ def _parse_date(value, end_of_day=False):
         return None
 
 
-def analyze_call(call_id, force=False, end_reason=None):
+def analyze_call(call_id, force=False, end_reason=None, run_validation=True):
     """Analyze a call and save to ClickHouse"""
     record = ch.get_record(call_id)
     if not record:
@@ -222,6 +249,23 @@ def analyze_call(call_id, force=False, end_reason=None):
     analytics.raw_model_response = parsed or None
     analytics.model_id = PCA_MODEL_ID
 
+    # Run validation analysis (Phase 2)
+    if run_validation and conversation and conversation != "(No conversation)":
+        try:
+            print(f"[PCA] Running validation for {call_id}")
+            validation_results = validation_service.validate_call_transcript(conversation)
+            
+            if validation_results:
+                analytics.validation_results = validation_results
+                analytics.validation_score = validation_results.get("weighted_score")
+                analytics.validation_percentage = validation_results.get("percentage")
+                analytics.skill_level = validation_results.get("skill_level")
+                print(f"[PCA] Validation complete: {analytics.skill_level} ({analytics.validation_percentage}%)")
+        except Exception as e:
+            print(f"[PCA] Validation failed for {call_id}: {e}")
+            import traceback
+            traceback.print_exc()
+
     try:
         ch.upsert_analytics(analytics)
     except Exception as e:
@@ -238,9 +282,12 @@ def ingest_call(payload):
 
     started = _parse_iso(payload.get("started_at"))
     ended = _parse_iso(payload.get("ended_at"))
-    duration = 0
-    if started and ended:
+    
+    # Prefer explicit duration_seconds from payload, otherwise calculate from timestamps
+    duration = payload.get("duration_seconds")
+    if duration is None and started and ended:
         duration = max(0, int((ended - started).total_seconds()))
+    duration = duration or 0
 
     record = ch.get_record(call_id) or CallRecord(call_id=call_id)
 
@@ -254,7 +301,7 @@ def ingest_call(payload):
     record.language = payload.get("language") or record.language or ''
     record.started_at = started or record.started_at or datetime.now()
     record.ended_at = ended or record.ended_at or datetime.now()
-    record.duration_seconds = duration or record.duration_seconds or 0
+    record.duration_seconds = duration
     record.transcript_s3_key = payload.get("transcript_key") or record.transcript_s3_key or ''
     record.recording_s3_key = payload.get("recording_key") or record.recording_s3_key or ''
 
@@ -291,10 +338,17 @@ def get_call_details(call_id):
             )
         except Exception as e:
             print(f"[PCA] Could not presign recording: {e}")
+    
+    # Extract filename from to_phone field (used for storage) or from S3 key
+    uploaded_file = record.to_phone if record.to_phone and not record.to_phone.startswith('+') else None
+    if not uploaded_file and record.recording_s3_key:
+        # Extract from S3 key pattern: call_id/recording.wav
+        uploaded_file = record.recording_s3_key.split('/')[-1] if '/' in record.recording_s3_key else "recording.wav"
 
     data = {
         "customerName": (analytics.customer_name if analytics else None) or record.from_phone or "Unknown",
-        "phoneNumber": record.from_phone or record.to_phone or "—",
+        "phoneNumber": record.from_phone or "—",
+        "uploadedFile": uploaded_file or "Unknown",
         "hangupReason": (analytics.hangup_reason if analytics else None) or "—",
         "language": record.language or "—",
         "callDuration": record._format_duration(),
@@ -334,6 +388,13 @@ def get_call_details(call_id):
             "agentPerformance": float(analytics.agent_performance) if analytics.agent_performance is not None else 0,
             "keyIndicators": analytics.key_indicators or [],
         }
+        
+        # Add validation data if available (Phase 2)
+        if analytics.validation_results:
+            data["validation"] = analytics.validation_results
+            data["validationScore"] = float(analytics.validation_score) if analytics.validation_score else 0
+            data["validationPercentage"] = float(analytics.validation_percentage) if analytics.validation_percentage else 0
+            data["skillLevel"] = analytics.skill_level or "Novice"
     
     return data
 

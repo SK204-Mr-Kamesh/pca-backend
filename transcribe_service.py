@@ -117,7 +117,10 @@ def transcribe_audio(s3_key, language_code='en-US'):
 def _parse_transcript(transcript_data):
     """
     Parse AWS Transcribe output into message format
-    Returns: [{'role': 'user'/'agent', 'text': '...', 'timestamp': '...'}]
+    Returns: [{'role': 'user'/'agent', 'text': '...', 'timestamp': '...', 'start_time': seconds}]
+    
+    Note: AWS Transcribe returns start_time as seconds from the beginning of audio (e.g., 0.5, 15.3)
+    We store this as 'start_time' in seconds for duration calculation
     """
     messages = []
     
@@ -132,7 +135,8 @@ def _parse_transcript(transcript_data):
             messages.append({
                 'role': 'user',
                 'text': full_text,
-                'timestamp': datetime.now().isoformat()
+                'start_time': 0.0,
+                'timestamp': '00:00'
             })
         return messages
     
@@ -153,20 +157,31 @@ def _parse_transcript(transcript_data):
         segment_items = segment.get('items', [])
         words = []
         start_time = None
+        end_time = None
         
         for seg_item in segment_items:
             item_start = float(seg_item['start_time'])
             if start_time is None:
                 start_time = item_start
+            # Track end time for last word
+            if 'end_time' in seg_item:
+                end_time = float(seg_item['end_time'])
             word = word_lookup.get(item_start, '')
             if word:
                 words.append(word)
         
-        if words:
+        if words and start_time is not None:
+            # Format timestamp as MM:SS
+            minutes = int(start_time // 60)
+            seconds = int(start_time % 60)
+            timestamp_str = f"{minutes:02d}:{seconds:02d}"
+            
             messages.append({
                 'role': role,
                 'text': ' '.join(words),
-                'timestamp': datetime.fromtimestamp(start_time).isoformat() if start_time else datetime.now().isoformat()
+                'start_time': start_time,  # Store raw seconds for duration calculation
+                'end_time': end_time,  # Store end time if available
+                'timestamp': timestamp_str
             })
     
     return messages
@@ -175,7 +190,7 @@ def _parse_transcript(transcript_data):
 def save_transcript_to_s3(transcript_messages, call_id, started_at=None):
     """
     Save transcript to S3 in the format expected by pca_service
-    Returns: S3 key
+    Returns: S3 key and calculated duration in seconds
     """
     clients = _get_aws_clients()
     s3_client = clients['s3']
@@ -183,10 +198,22 @@ def save_transcript_to_s3(transcript_messages, call_id, started_at=None):
     # S3 key format: {call_id}/transcript.json
     s3_key = f"{call_id}/transcript.json"
     
+    # Calculate actual call duration from transcript timestamps
+    duration_seconds = 0
+    if transcript_messages:
+        # Get the last message's end_time or start_time
+        last_msg = transcript_messages[-1]
+        if 'end_time' in last_msg and last_msg['end_time']:
+            duration_seconds = int(last_msg['end_time'])
+        elif 'start_time' in last_msg:
+            # Approximate: use start time + estimated message duration (5 seconds)
+            duration_seconds = int(last_msg['start_time']) + 5
+    
     # Build transcript object
     transcript = {
         'session_id': call_id,
         'started_at': started_at or datetime.now().isoformat(),
+        'duration_seconds': duration_seconds,
         'messages': transcript_messages
     }
     
@@ -198,4 +225,4 @@ def save_transcript_to_s3(transcript_messages, call_id, started_at=None):
         ContentType='application/json'
     )
     
-    return s3_key
+    return s3_key, duration_seconds

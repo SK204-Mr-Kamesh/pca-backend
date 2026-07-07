@@ -11,7 +11,7 @@ from werkzeug.utils import secure_filename
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from services import pca_service
+from services import pca_service, validation_service
 from transcribe_service import upload_audio_to_s3, transcribe_audio, save_transcript_to_s3
 from clickhouse_integration import CallRecord
 import clickhouse_integration as ch
@@ -61,44 +61,62 @@ def upload_call():
             return error_response('Empty filename', 400)
         
         # Get metadata from form data
-        caller_name = request.form.get('callerName', '')
-        language = request.form.get('language', 'en-US')
-        notes = request.form.get('notes', '')
+        caller_name = request.form.get('callerName', '').strip()
+        language = request.form.get('language', 'en-US').strip()
+        notes = request.form.get('notes', '').strip()
+        original_filename = secure_filename(file.filename)
         
         # Generate call ID
         call_id = f"call-{uuid.uuid4().hex[:12]}"
-        started_at = datetime.now()
+        upload_started_at = datetime.now()
         
-        # 1. Upload audio to S3
-        print(f"[PCA] Uploading audio for {call_id}")
+        # Upload audio to S3
+        print(f"[PCA] Uploading audio for {call_id} (file: {original_filename})")
         recording_s3_key = upload_audio_to_s3(file, call_id)
         
-        # 2. Transcribe audio
+        # Transcribe audio
         print(f"[PCA] Transcribing audio for {call_id}")
-        language_code = 'en-US' if language == 'English' else 'hi-IN' if language == 'Hindi' else 'en-US'
+        language_map = {
+            'English': 'en-US',
+            'Hindi': 'hi-IN',
+            'en-US': 'en-US',
+            'hi-IN': 'hi-IN'
+        }
+        language_code = language_map.get(language, 'en-US')
         transcript_messages = transcribe_audio(recording_s3_key, language_code)
         
-        # 3. Save transcript to S3
+        # Save transcript to S3
         print(f"[PCA] Saving transcript for {call_id}")
-        transcript_s3_key = save_transcript_to_s3(transcript_messages, call_id, started_at.isoformat())
+        transcript_s3_key, actual_duration = save_transcript_to_s3(
+            transcript_messages, 
+            call_id, 
+            upload_started_at.isoformat()
+        )
         
-        # 4. Calculate duration from transcript
-        ended_at = datetime.now()
-        duration = int((ended_at - started_at).total_seconds())
+        # Calculate timestamps
+        # Use upload time as started_at, and add actual call duration for ended_at
+        started_at = upload_started_at
+        ended_at = upload_started_at  # Will be recalculated with actual duration if available
+        if actual_duration > 0:
+            from datetime import timedelta
+            ended_at = started_at + timedelta(seconds=actual_duration)
         
-        # 5. Create call record and analyze
+        # Create call record and analyze
         print(f"[PCA] Creating record and analyzing {call_id}")
         payload = {
             'call_id': call_id,
             'session_id': call_id,
             'from_phone': caller_name or 'Unknown',
+            'to_phone': original_filename, 
             'language': language,
             'started_at': started_at.isoformat(),
             'ended_at': ended_at.isoformat(),
+            'duration_seconds': actual_duration,
             'status': 'answered',
             'call_source': 'upload',
             'transcript_key': transcript_s3_key,
-            'recording_key': recording_s3_key
+            'recording_key': recording_s3_key,
+            'notes': notes
         }
         
         record, analytics = pca_service.ingest_call(payload)
@@ -313,3 +331,58 @@ def pca_ingest():
         import traceback
         traceback.print_exc()
         return error_response(f'Ingest failed: {str(e)}', 500)
+
+
+# ── GET /api/pca/validation/categories ────────────────────────────────────────
+
+@pca_bp.route('/pca/validation/categories', methods=['GET'])
+def get_validation_categories():
+    """
+    Get validation categories configuration
+    Frontend: GET /api/pca/validation/categories
+    
+    Returns the validation matrix structure with all categories and parameters
+    """
+    try:
+        categories_info = validation_service.get_validation_categories_info()
+        return success_response('Validation categories retrieved', categories_info)
+        
+    except Exception as e:
+        print(f"[PCA] Get validation categories failed: {e}")
+        return error_response(f'Failed to get categories: {str(e)}', 500)
+
+
+# ── POST /api/pca/calls/{callId}/revalidate ───────────────────────────────────
+
+@pca_bp.route('/pca/calls/<string:call_id>/revalidate', methods=['POST'])
+def revalidate_call(call_id):
+    """
+    Re-run validation analysis on a specific call
+    Frontend: POST /api/pca/calls/{callId}/revalidate
+    
+    Useful for testing or re-evaluating with updated criteria
+    """
+    try:
+        # Re-analyze with validation forced
+        analytics = pca_service.analyze_call(call_id, force=True, run_validation=True)
+        
+        if not analytics:
+            return error_response('Call not found or analysis failed', 404)
+        
+        # Return validation results
+        validation_data = {}
+        if analytics.validation_results:
+            validation_data = validation_service.format_validation_for_frontend(analytics.validation_results)
+        
+        return success_response('Validation complete', {
+            'validation': validation_data,
+            'validationScore': float(analytics.validation_score) if analytics.validation_score else 0,
+            'validationPercentage': float(analytics.validation_percentage) if analytics.validation_percentage else 0,
+            'skillLevel': analytics.skill_level or 'Novice'
+        })
+        
+    except Exception as e:
+        print(f"[PCA] Revalidate failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return error_response(f'Revalidation failed: {str(e)}', 500)
