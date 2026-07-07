@@ -23,36 +23,68 @@ def _get_bedrock_client():
     )
 
 
-VALIDATION_SYSTEM_PROMPT = """You are an expert call quality analyst evaluating agent performance on customer support calls.
-You will receive a call transcript and must evaluate the agent's soft skills across 7 categories.
+VALIDATION_SYSTEM_PROMPT = """You are an expert call quality analyst evaluating agent performance.
 
-For each parameter, assign a score:
-- 5.0 = Expert level
-- 2.5 = Intermediate level  
-- 0.0 = Novice level
+--- CORE EVALUATION MATRIX ---
+Analyze the transcript and assign one marking for each parameter: "Expert", "Intermediate", "Novice", or "BI/CI".
 
-EVALUATION CATEGORIES:
+1. Greetings (Weight: 5)
+   - Did agent greet with energetic tone? Right salutation?
+   - Expert (5), Intermediate (2.5), Novice (0), BI/CI (0)
 
-1. GREETINGS: Did agent open with energetic, warm greeting within 3 seconds?
-2. CRM QUERY: Did agent paraphrase/confirm customer's issue clearly?
-3. ENERGY & ENTHUSIASM: Was speech clear, confident, appropriately paced?
-4. ACKNOWLEDGMENT: Did agent acknowledge customer appropriately without interrupting?
-5. GRAMMAR: Did agent use grammatically correct sentences?
-6. APOLOGY/EMPATHY: Did agent show empathy at appropriate moments?
-7. HOLD PROCESS: Did agent follow proper hold procedures (explain, seek permission, sign back)?
+2. CRM Query Paraphrase (Weight: 5)
+   - Did agent confirm product details? Paraphrase concern without making customer repeat?
+   - Expert (5), Intermediate (2.5), Novice (0), BI/CI (0)
 
-Respond with ONLY valid JSON (no markdown fences):
+3. Energy & Enthusiasm (Weight: 5)
+   - Energetic, clear speech, appropriate pace, confident (no unexplained pauses >2 sec)?
+   - Expert (5), Intermediate (2.5), Novice (0), BI/CI (0)
+
+4. Listening & Acknowledgment (Weight: 5)
+   - Active listening, appropriate responses, no interruptions?
+   - Expert (5), Intermediate (2.5), Novice (0), BI/CI (0)
+
+5. Grammar (Weight: 5)
+   - Grammatically correct sentences? No incomplete sentences or jargon?
+   - Expert (5), Intermediate (2.5), Novice (0), BI/CI (0)
+
+6. Apology/Empathy (Weight: 5)
+   - Genuine empathy/apology at right time with appropriate tone?
+   - Expert (5), Intermediate (2.5), Novice (0), BI/CI (0)
+
+7. Dead Air/Hold Process (Weight: 6)
+   - Followed hold protocols? Explained wait time, sought permission, proper sign-back, no dead air >10 sec?
+   - Expert (6), Intermediate (3), Novice (0), BI/CI (0), N/A (if hold not required)
+
+--- BI/CI RULE ---
+"BI/CI" = Business/Customer Impact violation (extreme rudeness, policy violation, misinformation, data exposure).
+If ANY parameter is BI/CI, set `is_critical_escalation: true`.
+
+--- SCORING ---
+- Total = Sum of all scores
+- Max Possible = 36 (or 30 if parameter 7 is N/A)
+- Percentage = (Total / Max) * 100
+- Skill Level: Expert (>=80%), Intermediate (50-79.9%), Novice (<50%)
+
+Respond with ONLY valid JSON (no markdown):
 {
-  "greetings": {"score": 5.0 | 2.5 | 0.0, "validation": "<observation>"},
-  "crm_query": {"score": 5.0 | 2.5 | 0.0, "validation": "<observation>"},
-  "energy_enthusiasm": {"score": 5.0 | 2.5 | 0.0, "validation": "<observation>"},
-  "acknowledgment": {"score": 5.0 | 2.5 | 0.0, "validation": "<observation>"},
-  "grammar": {"score": 5.0 | 2.5 | 0.0, "validation": "<observation>"},
-  "apology_empathy": {"score": 5.0 | 2.5 | 0.0, "validation": "<observation>"},
-  "hold_process": {"score": 5.0 | 2.5 | 0.0, "validation": "<observation or 'N/A' if no hold>"}
+  "validation": {
+    "greetings": {"marking": "Expert|Intermediate|Novice|BI/CI", "score": 5.0|2.5|0.0, "evidence": "..."},
+    "crm_query_paraphrase": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "..."},
+    "energy_enthusiasm_pace": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "..."},
+    "listening_acknowledgment": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "..."},
+    "grammar_vocabulary": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "..."},
+    "apology_empathy": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "..."},
+    "dead_air_hold_process": {"marking": "...|N/A", "score": 6.0|3.0|0.0, "evidence": "..."},
+    "total_earned_score": <sum>,
+    "max_possible_score": 36|30,
+    "percentage": <calculated>,
+    "skill_level": "Expert|Intermediate|Novice",
+    "is_critical_escalation": true|false
+  }
 }
 
-Be realistic and strict. Base scores strictly on transcript evidence."""
+Be strict and realistic. Base all scores on transcript evidence."""
 
 
 def _parse_validation_json(text: str) -> Dict:
@@ -97,7 +129,7 @@ def validate_call_transcript(conversation_text: str) -> Dict[str, Any]:
         conversation_text: Formatted transcript (Customer: ...\nAgent: ...\n)
     
     Returns:
-        Dictionary containing validation results with scores and validations
+        Dictionary containing validation results with marking, scores, and evidence
     """
     try:
         bedrock_client = _get_bedrock_client()
@@ -112,13 +144,17 @@ def validate_call_transcript(conversation_text: str) -> Dict[str, Any]:
         )
         
         output_text = response["output"]["message"]["content"][0]["text"].strip()
-        validation_results = _parse_validation_json(output_text)
+        results = _parse_validation_json(output_text)
         
-        # Calculate totals
-        if validation_results:
-            validation_results = _add_totals(validation_results)
+        # Validate and ensure proper structure
+        if results and "validation" in results:
+            return results
         
-        return validation_results
+        # Fallback if AI didn't wrap in "validation" key
+        if results and "greetings" in results:
+            return {"validation": results}
+        
+        return _get_empty_validation()
         
     except Exception as e:
         print(f"[VALIDATION] Validation failed: {e}")
@@ -128,97 +164,26 @@ def validate_call_transcript(conversation_text: str) -> Dict[str, Any]:
 
 
 def _add_totals(results: Dict) -> Dict:
-    """Calculate total scores"""
-    weights = {"greetings": 5, "crm_query": 5, "energy_enthusiasm": 5, 
-               "acknowledgment": 5, "grammar": 5, "apology_empathy": 6, "hold_process": 6}
-    
-    total = 0
-    weighted = 0
-    max_possible = sum(weights.values()) * 5
-    
-    for key, weight in weights.items():
-        if key in results:
-            score = results[key].get("score", 0)
-            total += score
-            weighted += score * weight
-    
-    percentage = (weighted / max_possible * 100) if max_possible > 0 else 0
-    
-    if percentage >= 80:
-        level = "Expert"
-    elif percentage >= 50:
-        level = "Intermediate"
-    else:
-        level = "Novice"
-    
-    results["total_score"] = round(total, 1)
-    results["weighted_score"] = round(weighted, 1)
-    results["percentage"] = round(percentage, 1)
-    results["skill_level"] = level
-    
+    """No longer needed - AI calculates totals"""
     return results
 
 
 def _get_empty_validation() -> Dict:
     """Return empty validation structure for error cases"""
     return {
-        "greetings": {"score": 0.0, "validation": "Analysis failed"},
-        "crm_query": {"score": 0.0, "validation": "Analysis failed"},
-        "energy_enthusiasm": {"score": 0.0, "validation": "Analysis failed"},
-        "acknowledgment": {"score": 0.0, "validation": "Analysis failed"},
-        "grammar": {"score": 0.0, "validation": "Analysis failed"},
-        "apology_empathy": {"score": 0.0, "validation": "Analysis failed"},
-        "hold_process": {"score": 0.0, "validation": "Analysis failed"},
-        "total_score": 0,
-        "weighted_score": 0,
-        "percentage": 0,
-        "skill_level": "Novice"
+        "validation": {
+            "greetings": {"marking": "Novice", "score": 0.0, "evidence": "Analysis failed"},
+            "crm_query_paraphrase": {"marking": "Novice", "score": 0.0, "evidence": "Analysis failed"},
+            "energy_enthusiasm_pace": {"marking": "Novice", "score": 0.0, "evidence": "Analysis failed"},
+            "listening_acknowledgment": {"marking": "Novice", "score": 0.0, "evidence": "Analysis failed"},
+            "grammar_vocabulary": {"marking": "Novice", "score": 0.0, "evidence": "Analysis failed"},
+            "apology_empathy": {"marking": "Novice", "score": 0.0, "evidence": "Analysis failed"},
+            "dead_air_hold_process": {"marking": "N/A", "score": 0.0, "evidence": "Analysis failed"},
+            "total_earned_score": 0,
+            "max_possible_score": 30,
+            "percentage": 0,
+            "skill_level": "Novice",
+            "is_critical_escalation": false
+        }
     }
 
-
-def format_validation_for_frontend(validation_results: Dict) -> Dict[str, Any]:
-    """Format validation results for frontend display"""
-    categories = {
-        "greetings": {"name": "Greetings", "weight": 5},
-        "crm_query": {"name": "CRM Query", "weight": 5},
-        "energy_enthusiasm": {"name": "Energy & Enthusiasm", "weight": 5},
-        "acknowledgment": {"name": "Acknowledgment", "weight": 5},
-        "grammar": {"name": "Grammar", "weight": 5},
-        "apology_empathy": {"name": "Apology/Empathy", "weight": 6},
-        "hold_process": {"name": "Hold Process", "weight": 6}
-    }
-    
-    matrix = []
-    for key, config in categories.items():
-        if key in validation_results:
-            data = validation_results[key]
-            matrix.append({
-                "category": config["name"],
-                "weight": config["weight"],
-                "score": data.get("score", 0),
-                "validation": data.get("validation", "N/A")
-            })
-    
-    return {
-        "validation_matrix": matrix,
-        "total_score": validation_results.get("total_score", 0),
-        "weighted_score": validation_results.get("weighted_score", 0),
-        "percentage": validation_results.get("percentage", 0),
-        "skill_level": validation_results.get("skill_level", "Novice")
-    }
-
-
-def get_validation_categories_info() -> Dict:
-    """Return validation categories configuration for frontend"""
-    return {
-        "categories": [
-            {"name": "Greetings", "weight": 5},
-            {"name": "CRM Query", "weight": 5},
-            {"name": "Energy & Enthusiasm", "weight": 5},
-            {"name": "Acknowledgment", "weight": 5},
-            {"name": "Grammar", "weight": 5},
-            {"name": "Apology/Empathy", "weight": 6},
-            {"name": "Hold Process", "weight": 6}
-        ],
-        "scoring": {"expert": 5.0, "intermediate": 2.5, "novice": 0.0}
-    }

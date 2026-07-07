@@ -8,6 +8,7 @@ import threading
 from datetime import datetime, timezone
 import clickhouse_connect
 
+
 RECORDS_TABLE = "voice_call_records"
 ANALYTICS_TABLE = "voice_call_analytics"
 

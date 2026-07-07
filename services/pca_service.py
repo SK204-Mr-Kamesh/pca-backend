@@ -255,11 +255,12 @@ def analyze_call(call_id, force=False, end_reason=None, run_validation=True):
             print(f"[PCA] Running validation for {call_id}")
             validation_results = validation_service.validate_call_transcript(conversation)
             
-            if validation_results:
+            if validation_results and "validation" in validation_results:
+                val_data = validation_results["validation"]
                 analytics.validation_results = validation_results
-                analytics.validation_score = validation_results.get("weighted_score")
-                analytics.validation_percentage = validation_results.get("percentage")
-                analytics.skill_level = validation_results.get("skill_level")
+                analytics.validation_score = val_data.get("total_earned_score")
+                analytics.validation_percentage = val_data.get("percentage")
+                analytics.skill_level = val_data.get("skill_level")
                 print(f"[PCA] Validation complete: {analytics.skill_level} ({analytics.validation_percentage}%)")
         except Exception as e:
             print(f"[PCA] Validation failed for {call_id}: {e}")

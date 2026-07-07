@@ -11,7 +11,7 @@ from werkzeug.utils import secure_filename
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from services import pca_service, validation_service
+from services import pca_service
 from transcribe_service import upload_audio_to_s3, transcribe_audio, save_transcript_to_s3
 from clickhouse_integration import CallRecord
 import clickhouse_integration as ch
@@ -331,58 +331,3 @@ def pca_ingest():
         import traceback
         traceback.print_exc()
         return error_response(f'Ingest failed: {str(e)}', 500)
-
-
-# ── GET /api/pca/validation/categories ────────────────────────────────────────
-
-@pca_bp.route('/pca/validation/categories', methods=['GET'])
-def get_validation_categories():
-    """
-    Get validation categories configuration
-    Frontend: GET /api/pca/validation/categories
-    
-    Returns the validation matrix structure with all categories and parameters
-    """
-    try:
-        categories_info = validation_service.get_validation_categories_info()
-        return success_response('Validation categories retrieved', categories_info)
-        
-    except Exception as e:
-        print(f"[PCA] Get validation categories failed: {e}")
-        return error_response(f'Failed to get categories: {str(e)}', 500)
-
-
-# ── POST /api/pca/calls/{callId}/revalidate ───────────────────────────────────
-
-@pca_bp.route('/pca/calls/<string:call_id>/revalidate', methods=['POST'])
-def revalidate_call(call_id):
-    """
-    Re-run validation analysis on a specific call
-    Frontend: POST /api/pca/calls/{callId}/revalidate
-    
-    Useful for testing or re-evaluating with updated criteria
-    """
-    try:
-        # Re-analyze with validation forced
-        analytics = pca_service.analyze_call(call_id, force=True, run_validation=True)
-        
-        if not analytics:
-            return error_response('Call not found or analysis failed', 404)
-        
-        # Return validation results
-        validation_data = {}
-        if analytics.validation_results:
-            validation_data = validation_service.format_validation_for_frontend(analytics.validation_results)
-        
-        return success_response('Validation complete', {
-            'validation': validation_data,
-            'validationScore': float(analytics.validation_score) if analytics.validation_score else 0,
-            'validationPercentage': float(analytics.validation_percentage) if analytics.validation_percentage else 0,
-            'skillLevel': analytics.skill_level or 'Novice'
-        })
-        
-    except Exception as e:
-        print(f"[PCA] Revalidate failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return error_response(f'Revalidation failed: {str(e)}', 500)
