@@ -141,7 +141,7 @@ def _invoke_bedrock_analysis(conversation_text):
             modelId=PCA_MODEL_ID,
             system=[{"text": _ANALYSIS_SYSTEM_PROMPT}],
             messages=[{"role": "user", "content": [{"text": f"Call transcript:\n\n{conversation_text}"}]}],
-            inferenceConfig={"maxTokens": 2000, "temperature": 0},
+            inferenceConfig={"maxTokens": 2000},
         )
         text = resp["output"]["message"]["content"][0]["text"].strip()
         return _parse_json(text)

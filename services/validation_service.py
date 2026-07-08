@@ -74,18 +74,30 @@ If ANY parameter is BI/CI, set `is_critical_escalation: true`.
 - Percentage = (Total / Max) * 100
 - Skill Level: Expert (>=80%), Intermediate (50-79.9%), Novice (<50%)
 
+--- EVIDENCE FORMAT ---
+Keep evidence brief (1-2 sentences MAX). State what happened, not why you scored it.
+Examples:
+✓ Good: "Agent greeted at 00:23 with 'Hello, welcome to Wakefit'"
+✗ Bad: "The agent demonstrated excellent greeting skills by providing a warm and professional welcome to the customer which showed good energy and enthusiasm throughout the initial interaction"
+
+✓ Good: "No brand name in closing at 09:45"
+✗ Bad: "The agent failed to mention the brand name during the call closing phase which is a requirement for proper closing procedures according to the standards"
+
+✓ Good: "Multiple interruptions at 02:15, 03:40"
+✗ Bad: "Throughout the conversation the agent interrupted the customer on several occasions which indicates poor listening skills"
+
 Respond with ONLY valid JSON (no markdown):
 {
   "validation": {
-    "greetings": {"marking": "Expert|Intermediate|Novice|BI/CI", "score": 5.0|2.5|0.0, "evidence": "..."},
-    "crm_query_paraphrase": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "..."},
-    "energy_enthusiasm_pace": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "..."},
-    "listening_acknowledgment": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "..."},
-    "grammar_vocabulary": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "..."},
-    "apology_empathy": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "..."},
-    "dead_air_hold_process": {"marking": "...|N/A", "score": 6.0|3.0|0.0, "evidence": "..."},
-    "good_right_probing": {"marking": "Expert|Novice|BI/CI", "score": 12.0|0.0, "evidence": "..."},
-    "correct_closing": {"marking": "Expert|Intermediate|Novice|BI/CI", "score": 6.0|3.0|0.0, "evidence": "..."},
+    "greetings": {"marking": "Expert|Intermediate|Novice|BI/CI", "score": 5.0|2.5|0.0, "evidence": "Brief 1-2 sentence observation"},
+    "crm_query_paraphrase": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "Brief 1-2 sentence observation"},
+    "energy_enthusiasm_pace": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "Brief 1-2 sentence observation"},
+    "listening_acknowledgment": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "Brief 1-2 sentence observation"},
+    "grammar_vocabulary": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "Brief 1-2 sentence observation"},
+    "apology_empathy": {"marking": "...", "score": 5.0|2.5|0.0, "evidence": "Brief 1-2 sentence observation"},
+    "dead_air_hold_process": {"marking": "...|N/A", "score": 6.0|3.0|0.0, "evidence": "Brief 1-2 sentence observation"},
+    "good_right_probing": {"marking": "Expert|Novice|BI/CI", "score": 12.0|0.0, "evidence": "Brief 1-2 sentence observation"},
+    "correct_closing": {"marking": "Expert|Intermediate|Novice|BI/CI", "score": 6.0|3.0|0.0, "evidence": "Brief 1-2 sentence observation"},
     "total_earned_score": <sum>,
     "max_possible_score": 54|48,
     "percentage": <calculated>,
@@ -94,7 +106,7 @@ Respond with ONLY valid JSON (no markdown):
   }
 }
 
-Be strict and realistic. Base all scores on transcript evidence."""
+Be strict and realistic. Keep evidence concise and factual."""
 
 
 def _parse_validation_json(text: str) -> Dict:
@@ -150,7 +162,7 @@ def validate_call_transcript(conversation_text: str) -> Dict[str, Any]:
             modelId=PCA_MODEL_ID,
             system=[{"text": VALIDATION_SYSTEM_PROMPT}],
             messages=[{"role": "user", "content": [{"text": user_message}]}],
-            inferenceConfig={"maxTokens": 1500, "temperature": 0.1},
+            inferenceConfig={"maxTokens": 3000},
         )
         
         output_text = response["output"]["message"]["content"][0]["text"].strip()
@@ -173,11 +185,6 @@ def validate_call_transcript(conversation_text: str) -> Dict[str, Any]:
         return _get_empty_validation()
 
 
-def _add_totals(results: Dict) -> Dict:
-    """No longer needed - AI calculates totals"""
-    return results
-
-
 def _get_empty_validation() -> Dict:
     """Return empty validation structure for error cases"""
     return {
@@ -195,7 +202,7 @@ def _get_empty_validation() -> Dict:
             "max_possible_score": 48,
             "percentage": 0,
             "skill_level": "Novice",
-            "is_critical_escalation": false
+            "is_critical_escalation": False
         }
     }
 

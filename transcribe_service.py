@@ -1,39 +1,39 @@
 """
-Audio transcription service using AWS Transcribe
+Audio transcription service using ElevenLabs
 """
 import os
 import json
-import time
-import uuid
 import boto3
 from datetime import datetime
+from elevenlabs.client import ElevenLabs
 
 AWS_REGION = os.environ.get('AWS_REGION', 'ap-south-1')
 S3_RECORDINGS_BUCKET = os.environ.get('S3_RECORDINGS_BUCKET', 'sahaa-voiceai-recordings')
+ELEVENLABS_API_KEY = os.environ.get('ELEVENLABS_API_KEY')
+ELEVENLABS_BASE_URL = os.environ.get('ELEVENLABS_BASE_URL', 'https://api.elevenlabs.in')
 
 
-def _get_aws_clients():
-    """Get AWS clients for Transcribe and S3"""
-    return {
-        's3': boto3.client(
-            's3',
-            aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
-            region_name=AWS_REGION
-        ),
-        'transcribe': boto3.client(
-            'transcribe',
-            aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
-            region_name=AWS_REGION
-        )
-    }
+def _get_s3_client():
+    """Get AWS S3 client"""
+    return boto3.client(
+        's3',
+        aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+        region_name=AWS_REGION
+    )
+
+
+def _get_elevenlabs_client():
+    """Get ElevenLabs client with regional support"""
+    return ElevenLabs(
+        api_key=ELEVENLABS_API_KEY,
+        base_url=ELEVENLABS_BASE_URL
+    )
 
 
 def upload_audio_to_s3(audio_file, call_id):
     """Upload audio file to S3 and return S3 key"""
-    clients = _get_aws_clients()
-    s3_client = clients['s3']
+    s3_client = _get_s3_client()
     
     # S3 key format: {call_id}/recording.wav
     s3_key = f"{call_id}/recording.wav"
@@ -52,85 +52,50 @@ def upload_audio_to_s3(audio_file, call_id):
 
 def transcribe_audio(s3_key, language_code='en-US'):
     """
-    Transcribe audio using AWS Transcribe
+    Transcribe audio using ElevenLabs
     Returns transcript messages in format: [{'role': 'user'/'agent', 'text': '...', 'timestamp': '...'}]
     """
-    clients = _get_aws_clients()
-    transcribe_client = clients['transcribe']
-    s3_client = clients['s3']
+    s3_client = _get_s3_client()
+    elevenlabs = _get_elevenlabs_client()
     
-    # Create unique job name
-    job_name = f"pca-{uuid.uuid4().hex[:8]}-{int(time.time())}"
+    # Download audio from S3 to memory
+    from io import BytesIO
+    audio_buffer = BytesIO()
+    s3_client.download_fileobj(S3_RECORDINGS_BUCKET, s3_key, audio_buffer)
+    audio_buffer.seek(0)
     
-    # S3 URI
-    audio_uri = f"s3://{S3_RECORDINGS_BUCKET}/{s3_key}"
+    # Map language codes: en-US -> eng, hi-IN -> hin
+    lang_map = {
+        'en-US': 'eng',
+        'hi-IN': 'hin'
+    }
+    elevenlabs_lang = lang_map.get(language_code, 'eng')
     
-    # Start transcription job
-    transcribe_client.start_transcription_job(
-        TranscriptionJobName=job_name,
-        Media={'MediaFileUri': audio_uri},
-        MediaFormat='wav',
-        LanguageCode=language_code,
-        Settings={
-            'ShowSpeakerLabels': True,
-            'MaxSpeakerLabels': 2
-        }
+    # Transcribe with ElevenLabs
+    transcription = elevenlabs.speech_to_text.convert(
+        file=audio_buffer,
+        model_id="scribe_v2",
+        tag_audio_events=True,
+        language_code=elevenlabs_lang,
+        diarize=True  # Enable speaker diarization
     )
     
-    # Wait for completion (poll every 5 seconds, max 5 minutes)
-    max_attempts = 60
-    attempt = 0
+    # Parse ElevenLabs response into messages
+    messages = _parse_elevenlabs_transcript(transcription)
     
-    while attempt < max_attempts:
-        attempt += 1
-        time.sleep(5)
-        
-        status = transcribe_client.get_transcription_job(TranscriptionJobName=job_name)
-        job_status = status['TranscriptionJob']['TranscriptionJobStatus']
-        
-        if job_status == 'COMPLETED':
-            # Get transcript URI
-            transcript_uri = status['TranscriptionJob']['Transcript']['TranscriptFileUri']
-            
-            # Download transcript directly from the URI (it's a presigned URL)
-            import requests
-            transcript_response = requests.get(transcript_uri)
-            transcript_data = transcript_response.json()
-            
-            # Parse transcript into messages
-            messages = _parse_transcript(transcript_data)
-            
-            # Clean up transcription job
-            try:
-                transcribe_client.delete_transcription_job(TranscriptionJobName=job_name)
-            except:
-                pass
-            
-            return messages
-        
-        elif job_status == 'FAILED':
-            raise Exception(f"Transcription failed: {status['TranscriptionJob'].get('FailureReason', 'Unknown')}")
-    
-    raise Exception("Transcription timed out")
+    return messages
 
-
-def _parse_transcript(transcript_data):
+def _parse_elevenlabs_transcript(transcription):
     """
-    Parse AWS Transcribe output into message format
+    Parse ElevenLabs output into message format
     Returns: [{'role': 'user'/'agent', 'text': '...', 'timestamp': '...', 'start_time': seconds}]
     
-    Note: AWS Transcribe returns start_time as seconds from the beginning of audio (e.g., 0.5, 15.3)
-    We store this as 'start_time' in seconds for duration calculation
+    ElevenLabs with diarize=True returns word-level data with speaker labels and timestamps
     """
     messages = []
     
-    # Get speaker segments
-    segments = transcript_data.get('results', {}).get('speaker_labels', {}).get('segments', [])
-    items = transcript_data.get('results', {}).get('items', [])
-    
-    if not segments:
-        # No speaker labels, treat all as single speaker
-        full_text = transcript_data.get('results', {}).get('transcripts', [{}])[0].get('transcript', '')
+    if not hasattr(transcription, 'words') or not transcription.words:
+        full_text = getattr(transcription, 'text', '')
         if full_text:
             messages.append({
                 'role': 'user',
@@ -140,49 +105,77 @@ def _parse_transcript(transcript_data):
             })
         return messages
     
-    # Build word lookup
-    word_lookup = {}
-    for item in items:
-        if item['type'] == 'pronunciation':
-            start_time = float(item['start_time'])
-            word_lookup[start_time] = item['alternatives'][0]['content']
+    current_speaker = None
+    current_words = []
+    current_start_time = None
+    current_end_time = None
     
-    # Build messages from segments
-    for segment in segments:
-        speaker_label = segment.get('speaker_label', 'spk_0')
-        # Assume spk_0 is customer (user), spk_1 is agent
-        role = 'user' if speaker_label == 'spk_0' else 'agent'
+    for word_obj in transcription.words:
+        speaker = getattr(word_obj, 'speaker_id', None)
+        word_text = getattr(word_obj, 'text', '')
+        word_type = getattr(word_obj, 'type', 'word')
+        start_time = getattr(word_obj, 'start', None)
+        end_time = getattr(word_obj, 'end', None)
         
-        # Get words for this segment
-        segment_items = segment.get('items', [])
-        words = []
-        start_time = None
-        end_time = None
+        # Skip spacing and audio events for word collection (but track timestamps)
+        if word_type == 'spacing' or word_type == 'audio_event':
+            if end_time is not None:
+                current_end_time = end_time
+            continue
         
-        for seg_item in segment_items:
-            item_start = float(seg_item['start_time'])
-            if start_time is None:
-                start_time = item_start
-            # Track end time for last word
-            if 'end_time' in seg_item:
-                end_time = float(seg_item['end_time'])
-            word = word_lookup.get(item_start, '')
-            if word:
-                words.append(word)
-        
-        if words and start_time is not None:
-            # Format timestamp as MM:SS
-            minutes = int(start_time // 60)
-            seconds = int(start_time % 60)
-            timestamp_str = f"{minutes:02d}:{seconds:02d}"
+        # If speaker changes, save the previous segment
+        if speaker != current_speaker and current_words:
+            # Determine role: speaker_0 is customer, speaker_1 is agent
+            role = 'user' if current_speaker == 'speaker_0' else 'agent'
+            
+            # Format timestamp
+            if current_start_time is not None:
+                minutes = int(current_start_time // 60)
+                seconds = int(current_start_time % 60)
+                timestamp_str = f"{minutes:02d}:{seconds:02d}"
+            else:
+                timestamp_str = '00:00'
             
             messages.append({
                 'role': role,
-                'text': ' '.join(words),
-                'start_time': start_time,  # Store raw seconds for duration calculation
-                'end_time': end_time,  # Store end time if available
+                'text': ' '.join(current_words),
+                'start_time': current_start_time if current_start_time is not None else 0.0,
+                'end_time': current_end_time,
                 'timestamp': timestamp_str
             })
+            
+            # Reset for new speaker
+            current_words = []
+            current_start_time = None
+            current_end_time = None
+        
+        # Update current segment
+        current_speaker = speaker
+        if word_text and word_type == 'word':
+            current_words.append(word_text)
+        if current_start_time is None and start_time is not None:
+            current_start_time = start_time
+        if end_time is not None:
+            current_end_time = end_time
+    
+    # Add the last segment
+    if current_words:
+        role = 'user' if current_speaker == 'speaker_0' else 'agent'
+        
+        if current_start_time is not None:
+            minutes = int(current_start_time // 60)
+            seconds = int(current_start_time % 60)
+            timestamp_str = f"{minutes:02d}:{seconds:02d}"
+        else:
+            timestamp_str = '00:00'
+        
+        messages.append({
+            'role': role,
+            'text': ' '.join(current_words),
+            'start_time': current_start_time if current_start_time is not None else 0.0,
+            'end_time': current_end_time,
+            'timestamp': timestamp_str
+        })
     
     return messages
 
@@ -192,8 +185,7 @@ def save_transcript_to_s3(transcript_messages, call_id, started_at=None):
     Save transcript to S3 in the format expected by pca_service
     Returns: S3 key and calculated duration in seconds
     """
-    clients = _get_aws_clients()
-    s3_client = clients['s3']
+    s3_client = _get_s3_client()
     
     # S3 key format: {call_id}/transcript.json
     s3_key = f"{call_id}/transcript.json"
