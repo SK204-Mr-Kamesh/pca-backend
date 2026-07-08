@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 import clickhouse_connect
 
 
-RECORDS_TABLE = "voice_call_records"
-ANALYTICS_TABLE = "voice_call_analytics"
+RECORDS_TABLE = "wakefit_call_records"
+ANALYTICS_TABLE = "wakefit_call_analytics"
 
 _thread_local = threading.local()
 
@@ -58,14 +58,15 @@ class CallRecord:
     _FIELDS = [
         "call_id", "agent_id", "account_id", "room_name", "from_phone", "to_phone",
         "call_source", "status", "language", "started_at", "ended_at",
-        "duration_seconds", "transcript_s3_key", "recording_s3_key", "created_on",
+        "duration_seconds", "transcript_s3_key", "recording_s3_key", 
+        "audio_size", "uploaded_filename", "notes", "created_on",
     ]
 
     def __init__(self, call_id, agent_id=None, account_id=None, room_name=None,
                  from_phone=None, to_phone=None, call_source="livekit",
                  status="answered", language=None, started_at=None, ended_at=None,
                  duration_seconds=0, transcript_s3_key=None, recording_s3_key=None,
-                 created_on=None):
+                 audio_size=None, uploaded_filename=None, notes=None, created_on=None):
         self.call_id = call_id
         self.agent_id = agent_id
         self.account_id = account_id
@@ -80,6 +81,9 @@ class CallRecord:
         self.duration_seconds = duration_seconds or 0
         self.transcript_s3_key = transcript_s3_key
         self.recording_s3_key = recording_s3_key
+        self.audio_size = audio_size
+        self.uploaded_filename = uploaded_filename
+        self.notes = notes or ""
         self.created_on = created_on
 
     def _format_duration(self):
@@ -88,6 +92,22 @@ class CallRecord:
 
     def to_log_dict(self, analytics=None):
         """Frontend call-logs table row format"""
+        # Convert audio size from bytes to MB
+        audio_size_mb = None
+        if self.audio_size:
+            audio_size_mb = round(self.audio_size / (1024 * 1024), 2)
+        
+        # Convert created_on to IST (UTC+5:30)
+        call_start_ist = "—"
+        if self.created_on:
+            from datetime import timedelta, timezone
+            dt = self.created_on
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            ist_offset = timedelta(hours=5, minutes=30)
+            ist_dt = dt.astimezone(timezone.utc) + ist_offset
+            call_start_ist = ist_dt.strftime('%d/%m/%Y, %H:%M:%S')
+        
         return {
             "callId": self.call_id,
             "customerName": (analytics.customer_name if analytics and analytics.customer_name else None) or self.from_phone or "Unknown",
@@ -96,10 +116,13 @@ class CallRecord:
             "language": self.language or "—",
             "callDuration": self._format_duration(),
             "status": self.status,
-            "callStart": self.created_on.strftime('%d/%m/%Y, %H:%M:%S') if self.created_on else "—",
+            "callStart": call_start_ist,
             "sentiment": float(analytics.overall_sentiment) if analytics and analytics.overall_sentiment else 0,
             "customerSatisfaction": float(analytics.customer_satisfaction) if analytics and analytics.customer_satisfaction else 0,
             "agentPerformance": float(analytics.agent_performance) if analytics and analytics.agent_performance else 0,
+            "uploadedFilename": self.uploaded_filename or "—",
+            "notes": self.notes or "",
+            "audioSize": audio_size_mb,
         }
 
     @staticmethod
@@ -166,15 +189,15 @@ class CallAnalytics:
 _RECORD_COLUMNS = [
     "call_id", "agent_id", "account_id", "room_name", "from_phone", "to_phone",
     "call_source", "status", "language", "started_at", "ended_at",
-    "duration_seconds", "transcript_s3_key", "recording_s3_key", "created_on",
-    "updated_at",
+    "duration_seconds", "transcript_s3_key", "recording_s3_key",
+    "audio_size", "uploaded_filename", "notes", "created_on",
 ]
 
 _ANALYTICS_COLUMNS = [
     "call_id", "overall_sentiment", "customer_satisfaction", "agent_performance",
     "summary", "topics", "action_items", "key_indicators", "call_matrices",
     "customer_name", "hangup_reason", "raw_model_response", "model_id",
-    "created_on", "updated_at",
+    "created_on",
 ]
 
 _ANALYTICS_SELECT = [
@@ -192,7 +215,7 @@ def get_record(call_id):
     """Return the latest CallRecord for call_id, or None"""
     try:
         rows = _get_client().query(
-            f"SELECT {', '.join(CallRecord._FIELDS)} FROM {RECORDS_TABLE} FINAL "
+            f"SELECT {', '.join(CallRecord._FIELDS)} FROM {RECORDS_TABLE} "
             f"WHERE call_id = %(cid)s LIMIT 1",
             parameters={"cid": call_id},
         ).result_rows
@@ -222,8 +245,10 @@ def upsert_record(record: CallRecord):
         int(record.duration_seconds or 0),
         record.transcript_s3_key or "",
         record.recording_s3_key or "",
+        record.audio_size,
+        record.uploaded_filename or "",
+        record.notes or "",
         record.created_on or _now(),
-        _now(),
     ]
     try:
         _get_client().insert(RECORDS_TABLE, [row], column_names=_RECORD_COLUMNS)
@@ -278,7 +303,7 @@ def get_analytics(call_id):
     """Return the latest CallAnalytics for call_id, or None"""
     try:
         rows = _get_client().query(
-            f"SELECT {', '.join(_ANALYTICS_SELECT)} FROM {ANALYTICS_TABLE} FINAL "
+            f"SELECT {', '.join(_ANALYTICS_SELECT)} FROM {ANALYTICS_TABLE} "
             f"WHERE call_id = %(cid)s LIMIT 1",
             parameters={"cid": call_id},
         ).result_rows
@@ -297,7 +322,7 @@ def get_analytics_map(call_ids):
         return {}
     try:
         rows = _get_client().query(
-            f"SELECT {', '.join(_ANALYTICS_SELECT)} FROM {ANALYTICS_TABLE} FINAL "
+            f"SELECT {', '.join(_ANALYTICS_SELECT)} FROM {ANALYTICS_TABLE} "
             f"WHERE call_id IN %(ids)s",
             parameters={"ids": list(call_ids)},
         ).result_rows
@@ -343,7 +368,6 @@ def upsert_analytics(a: CallAnalytics):
         json.dumps(combined_response) if combined_response else "",
         a.model_id or "",
         a.created_on or _now(),
-        _now(),
     ]
     try:
         _get_client().insert(ANALYTICS_TABLE, [row], column_names=_ANALYTICS_COLUMNS)
@@ -369,11 +393,11 @@ def query_records(agent_id, start_date=None, end_date=None, page=None, limit=Non
     try:
         client = _get_client()
         total = client.query(
-            f"SELECT count() FROM (SELECT call_id FROM {RECORDS_TABLE} FINAL WHERE {where_sql})",
+            f"SELECT count() FROM (SELECT call_id FROM {RECORDS_TABLE} WHERE {where_sql})",
             parameters=params,
         ).result_rows[0][0]
 
-        sql = (f"SELECT {', '.join(CallRecord._FIELDS)} FROM {RECORDS_TABLE} FINAL "
+        sql = (f"SELECT {', '.join(CallRecord._FIELDS)} FROM {RECORDS_TABLE} "
                f"WHERE {where_sql} ORDER BY created_on DESC")
         if limit is not None:
             sql += " LIMIT %(limit)s OFFSET %(offset)s"

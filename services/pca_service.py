@@ -305,6 +305,9 @@ def ingest_call(payload):
     record.duration_seconds = duration
     record.transcript_s3_key = payload.get("transcript_key") or record.transcript_s3_key or ''
     record.recording_s3_key = payload.get("recording_key") or record.recording_s3_key or ''
+    record.audio_size = payload.get("audio_size") or record.audio_size
+    record.uploaded_filename = payload.get("uploaded_filename") or record.uploaded_filename or ''
+    record.notes = payload.get("notes") or record.notes or ''
 
     ch.upsert_record(record)
 
@@ -317,6 +320,8 @@ def ingest_call(payload):
 
 def get_call_details(call_id):
     """Get full call details with analytics"""
+    from datetime import timedelta, timezone
+    
     record = ch.get_record(call_id)
     if not record:
         return None
@@ -340,22 +345,35 @@ def get_call_details(call_id):
         except Exception as e:
             print(f"[PCA] Could not presign recording: {e}")
     
-    # Extract filename from to_phone field (used for storage) or from S3 key
-    uploaded_file = record.to_phone if record.to_phone and not record.to_phone.startswith('+') else None
-    if not uploaded_file and record.recording_s3_key:
-        # Extract from S3 key pattern: call_id/recording.wav
-        uploaded_file = record.recording_s3_key.split('/')[-1] if '/' in record.recording_s3_key else "recording.wav"
+    # Convert times to IST (UTC+5:30)
+    def to_ist(dt):
+        if not dt:
+            return None
+        if dt.tzinfo is None:
+            # Assume UTC if no timezone
+            dt = dt.replace(tzinfo=timezone.utc)
+        ist_offset = timedelta(hours=5, minutes=30)
+        ist_dt = dt.astimezone(timezone.utc) + ist_offset
+        return ist_dt.strftime("%d/%m/%Y, %H:%M:%S")
+    
+    # Convert audio size to MB
+    audio_size_mb = None
+    if record.audio_size:
+        audio_size_mb = round(record.audio_size / (1024 * 1024), 2)
 
     data = {
         "customerName": (analytics.customer_name if analytics else None) or record.from_phone or "Unknown",
         "phoneNumber": record.from_phone or "—",
-        "uploadedFile": uploaded_file or "Unknown",
+        "uploadedFile": record.uploaded_filename or "—",
+        "uploadedAt": to_ist(record.created_on),
+        "audioSize": audio_size_mb,
+        "notes": record.notes or "",
         "hangupReason": (analytics.hangup_reason if analytics else None) or "—",
         "language": record.language or "—",
         "callDuration": record._format_duration(),
         "status": record.status,
-        "callStart": record.started_at.strftime("%d/%m/%Y, %H:%M:%S") if record.started_at else "—",
-        "callEnd": record.ended_at.strftime("%d/%m/%Y, %H:%M:%S") if record.ended_at else "—",
+        "callStart": to_ist(record.started_at) or "—",
+        "callEnd": to_ist(record.ended_at) or "—",
         "transcript": _messages_to_turns(messages, started),
         "recordingUrl": recording_url,
         "chatConversation": [{
