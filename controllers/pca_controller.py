@@ -265,6 +265,32 @@ def get_call(call_id):
         return error_response(f'Failed to get call: {str(e)}', 500)
 
 
+# ── DELETE /api/pca/calls/{callId} ────────────────────────────────────────────
+
+@pca_bp.route('/pca/calls/<string:call_id>', methods=['DELETE'])
+def delete_call(call_id):
+    """
+    Delete call record, analytics, and S3 files
+    Frontend: DELETE /api/pca/calls/{callId}
+    """
+    try:
+        success = pca_service.delete_call(call_id)
+        
+        if not success:
+            return error_response('Failed to delete call', 500)
+        
+        return success_response('Call deleted successfully', {
+            'callId': call_id,
+            'deleted': True
+        })
+        
+    except Exception as e:
+        print(f"[PCA] Delete call failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return error_response(f'Failed to delete call: {str(e)}', 500)
+
+
 # ── GET /api/pca/calls/{callId}/processing ────────────────────────────────────
 
 @pca_bp.route('/pca/calls/<string:call_id>/processing', methods=['GET'])

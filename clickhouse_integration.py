@@ -411,3 +411,29 @@ def query_records(agent_id, start_date=None, end_date=None, page=None, limit=Non
 
     records = [CallRecord(**dict(zip(CallRecord._FIELDS, r))) for r in rows]
     return records, total
+
+
+def delete_call(call_id):
+    """Delete call record and analytics from both tables"""
+    try:
+        client = _get_client()
+        
+        # Delete from records table
+        client.command(
+            f"ALTER TABLE {RECORDS_TABLE} DELETE WHERE call_id = %(cid)s",
+            parameters={"cid": call_id}
+        )
+        
+        # Delete from analytics table
+        client.command(
+            f"ALTER TABLE {ANALYTICS_TABLE} DELETE WHERE call_id = %(cid)s",
+            parameters={"cid": call_id}
+        )
+        
+        print(f"[PCA-CH] Deleted call {call_id} from ClickHouse")
+        return True
+        
+    except Exception as e:
+        print(f"[PCA-CH] delete_call failed for {call_id}: {e}")
+        _reset_client()
+        return False

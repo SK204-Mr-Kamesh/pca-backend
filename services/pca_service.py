@@ -484,3 +484,48 @@ def chat_about_call(call_id, question):
     except Exception as e:
         print(f"[PCA] chat_about_call failed: {e}")
         return "Sorry, I couldn't process that right now."
+
+
+
+def delete_call(call_id):
+    """Delete call record, analytics, and S3 files"""
+    try:
+        # Get record first to get S3 keys
+        record = ch.get_record(call_id)
+        if not record:
+            print(f"[PCA] Call {call_id} not found")
+            return False
+        
+        # Delete from S3
+        s3_client, _ = _get_aws_clients()
+        s3_keys_to_delete = []
+        
+        if record.transcript_s3_key:
+            s3_keys_to_delete.append({'Key': record.transcript_s3_key})
+        
+        if record.recording_s3_key:
+            s3_keys_to_delete.append({'Key': record.recording_s3_key})
+        
+        if s3_keys_to_delete:
+            try:
+                s3_client.delete_objects(
+                    Bucket=RECORDINGS_BUCKET,
+                    Delete={'Objects': s3_keys_to_delete}
+                )
+                print(f"[PCA] Deleted {len(s3_keys_to_delete)} S3 objects for {call_id}")
+            except Exception as e:
+                print(f"[PCA] Failed to delete S3 objects for {call_id}: {e}")
+        
+        # Delete from ClickHouse
+        success = ch.delete_call(call_id)
+        
+        if success:
+            print(f"[PCA] Successfully deleted call {call_id}")
+        
+        return success
+        
+    except Exception as e:
+        print(f"[PCA] delete_call failed for {call_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
