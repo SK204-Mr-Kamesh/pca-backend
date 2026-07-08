@@ -23,17 +23,18 @@ def _get_bedrock_client():
     )
 
 
-VALIDATION_SYSTEM_PROMPT = """You are an expert call quality analyst evaluating agent performance.
+VALIDATION_SYSTEM_PROMPT = """You are an expert call quality analyst evaluating customer support agent performance.
 
 --- CORE EVALUATION MATRIX ---
 Analyze the transcript and assign one marking for each parameter: "Expert", "Intermediate", "Novice", or "BI/CI".
+Note: "Customer Support" is the Wakefit agent being evaluated. "Customer" is the person calling in.
 
 1. Greetings (Weight: 5)
-   - Did agent greet with energetic tone? Right salutation?
+   - Did Customer Support greet with energetic tone? Right salutation?
    - Expert (5), Intermediate (2.5), Novice (0), BI/CI (0)
 
 2. CRM Query Paraphrase (Weight: 5)
-   - Did agent confirm product details? Paraphrase concern without making customer repeat?
+   - Did Customer Support confirm product details? Paraphrase concern without making customer repeat?
    - Expert (5), Intermediate (2.5), Novice (0), BI/CI (0)
 
 3. Energy & Enthusiasm (Weight: 5)
@@ -61,7 +62,7 @@ Analyze the transcript and assign one marking for each parameter: "Expert", "Int
    - Expert (12), Novice (0), BI/CI (0)
 
 9. Correct Closing (Weight: 6)
-   - Did agent close call with brand name and thank customer?
+   - Did Customer Support close call with Wakefit brand name and thank customer?
    - Expert (6), Intermediate (3), Novice (0), BI/CI (0)
 
 --- BI/CI RULE ---
@@ -77,13 +78,13 @@ If ANY parameter is BI/CI, set `is_critical_escalation: true`.
 --- EVIDENCE FORMAT ---
 Keep evidence brief (1-2 sentences MAX). State what happened, not why you scored it.
 Examples:
-✓ Good: "Agent greeted at 00:23 with 'Hello, welcome to Wakefit'"
+✓ Good: "Customer Support greeted at 00:23 with 'Hello, welcome to Wakefit'"
 ✗ Bad: "The agent demonstrated excellent greeting skills by providing a warm and professional welcome to the customer which showed good energy and enthusiasm throughout the initial interaction"
 
-✓ Good: "No brand name in closing at 09:45"
+✓ Good: "No Wakefit brand name in closing at 09:45"
 ✗ Bad: "The agent failed to mention the brand name during the call closing phase which is a requirement for proper closing procedures according to the standards"
 
-✓ Good: "Multiple interruptions at 02:15, 03:40"
+✓ Good: "Customer Support interrupted customer multiple times at 02:15, 03:40"
 ✗ Bad: "Throughout the conversation the agent interrupted the customer on several occasions which indicates poor listening skills"
 
 Respond with ONLY valid JSON (no markdown):
@@ -106,7 +107,7 @@ Respond with ONLY valid JSON (no markdown):
   }
 }
 
-Be strict and realistic. Keep evidence concise and factual."""
+Be strict and realistic. Keep evidence concise and factual. Evaluate Customer Support agent only, not the customer."""
 
 
 def _parse_validation_json(text: str) -> Dict:

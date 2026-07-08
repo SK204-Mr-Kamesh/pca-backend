@@ -50,7 +50,7 @@ def format_transcript(messages):
         return "(No conversation)"
     lines = []
     for msg in messages:
-        role = "Customer" if msg.get("role") == "user" else "Agent"
+        role = "Customer" if msg.get("role") == "user" else "Customer Support"
         lines.append(f"{role}: {msg.get('text', '')}")
     return "\n".join(lines)
 
@@ -75,7 +75,7 @@ def _messages_to_turns(messages, started_at=None):
         else:
             stamp = "00:00"
         turns.append({
-            "speaker": "User" if speaker_type == "user" else "Agent",
+            "speaker": "Customer" if speaker_type == "user" else "Customer Support",
             "timestamp": stamp,
             "content": msg.get("text", ""),
             "type": speaker_type,
@@ -84,7 +84,7 @@ def _messages_to_turns(messages, started_at=None):
 
 
 _ANALYSIS_SYSTEM_PROMPT = """You are a call-quality analyst for a customer-support voice platform.
-You receive a full transcript of a completed call between an Agent and a Customer.
+You receive a full transcript of a completed call between a Customer Support Agent and a Customer.
 Analyse it and respond with ONLY a single valid JSON object — no prose, no markdown fences.
 
 The JSON must have exactly these keys:

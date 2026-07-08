@@ -85,6 +85,61 @@ def transcribe_audio(s3_key, language_code='en-US'):
     
     return messages
 
+def _detect_agent_speaker(temp_messages):
+    """
+    Intelligently detect which speaker is the Customer Support agent
+    Returns: 'speaker_0' or 'speaker_1' (whichever is the agent)
+    """
+    if not temp_messages or len(temp_messages) < 2:
+        return 'speaker_0'  # Default fallback
+    
+    speaker_0_score = 0
+    speaker_1_score = 0
+    
+    # Analyze first 5 messages for patterns
+    for msg in temp_messages[:5]:
+        text = msg.get('text', '').lower()
+        speaker = msg.get('_raw_speaker', '')
+        
+        if not text or not speaker:
+            continue
+        
+        # Agent indicators
+        agent_keywords = [
+            'wakefit', 'wake fit',
+            'good morning', 'good evening', 'good afternoon',
+            'how can i help', 'how may i help', 'how can i assist',
+            'call back request', 'raised a request',
+            'let me check', 'let me look into', 'just give me a moment',
+            'sir', 'ma\'am', 'mister',
+            'thank you for calling', 'thanks for calling'
+        ]
+        
+        # Customer indicators
+        customer_keywords = [
+            'i am waiting', 'i\'m waiting', 'i have been waiting',
+            'not delivered', 'didn\'t receive', 'haven\'t received',
+            'my order', 'i ordered', 'i bought',
+            'i need', 'i want', 'i require'
+        ]
+        
+        agent_count = sum(1 for keyword in agent_keywords if keyword in text)
+        customer_count = sum(1 for keyword in customer_keywords if keyword in text)
+        
+        if speaker == 'speaker_0':
+            speaker_0_score += agent_count - customer_count
+        elif speaker == 'speaker_1':
+            speaker_1_score += agent_count - customer_count
+    
+    # Higher score = more likely to be agent
+    if speaker_0_score > speaker_1_score:
+        return 'speaker_0'
+    elif speaker_1_score > speaker_0_score:
+        return 'speaker_1'
+    else:
+        return 'speaker_0'  # Default fallback
+
+
 def _parse_elevenlabs_transcript(transcription):
     """
     Parse ElevenLabs output into message format
@@ -98,13 +153,15 @@ def _parse_elevenlabs_transcript(transcription):
         full_text = getattr(transcription, 'text', '')
         if full_text:
             messages.append({
-                'role': 'user',
+                'role': 'agent',
                 'text': full_text,
                 'start_time': 0.0,
                 'timestamp': '00:00'
             })
         return messages
     
+    # First pass: Group words by speaker
+    temp_messages = []
     current_speaker = None
     current_words = []
     current_start_time = None
@@ -125,9 +182,6 @@ def _parse_elevenlabs_transcript(transcription):
         
         # If speaker changes, save the previous segment
         if speaker != current_speaker and current_words:
-            # Determine role: speaker_0 is customer, speaker_1 is agent
-            role = 'user' if current_speaker == 'speaker_0' else 'agent'
-            
             # Format timestamp
             if current_start_time is not None:
                 minutes = int(current_start_time // 60)
@@ -136,8 +190,8 @@ def _parse_elevenlabs_transcript(transcription):
             else:
                 timestamp_str = '00:00'
             
-            messages.append({
-                'role': role,
+            temp_messages.append({
+                '_raw_speaker': current_speaker,
                 'text': ' '.join(current_words),
                 'start_time': current_start_time if current_start_time is not None else 0.0,
                 'end_time': current_end_time,
@@ -160,8 +214,6 @@ def _parse_elevenlabs_transcript(transcription):
     
     # Add the last segment
     if current_words:
-        role = 'user' if current_speaker == 'speaker_0' else 'agent'
-        
         if current_start_time is not None:
             minutes = int(current_start_time // 60)
             seconds = int(current_start_time % 60)
@@ -169,13 +221,23 @@ def _parse_elevenlabs_transcript(transcription):
         else:
             timestamp_str = '00:00'
         
-        messages.append({
-            'role': role,
+        temp_messages.append({
+            '_raw_speaker': current_speaker,
             'text': ' '.join(current_words),
             'start_time': current_start_time if current_start_time is not None else 0.0,
             'end_time': current_end_time,
             'timestamp': timestamp_str
         })
+    
+    # Second pass: Detect which speaker is the agent
+    agent_speaker = _detect_agent_speaker(temp_messages)
+    
+    # Third pass: Assign correct roles
+    for msg in temp_messages:
+        raw_speaker = msg.pop('_raw_speaker')
+        role = 'agent' if raw_speaker == agent_speaker else 'user'
+        msg['role'] = role
+        messages.append(msg)
     
     return messages
 
