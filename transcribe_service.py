@@ -50,6 +50,86 @@ def upload_audio_to_s3(audio_file, call_id):
     return s3_key
 
 
+def _word_format(text):
+    if not text:
+        return text
+    
+    import re
+    
+    patterns = [
+        (r'\bwiprit\b', 'Wakefit'),
+        (r'\brakefirt\b', 'Wakefit'),
+        (r'\bwakefeet\b', 'Wakefit'),
+        (r'\bwakefeat\b', 'Wakefit'),
+        (r'\bwakepit\b', 'Wakefit'),
+        (r'\bwikfit\b', 'Wakefit'),
+        (r'\bwikfeet\b', 'Wakefit'),
+        (r'\bvakefit\b', 'Wakefit'),
+        (r'\bvakfit\b', 'Wakefit'),
+        (r'\bweakfit\b', 'Wakefit'),
+        (r'\bwekfit\b', 'Wakefit'),
+        (r'\bwak\s*fit\b', 'Wakefit'),
+        (r'\bwake\s*fit\b', 'Wakefit'),
+        (r'\bwik\s*fit\b', 'Wakefit'),
+        (r'\bvake\s*fit\b', 'Wakefit'),
+        (r'\bwak\s*feet\b', 'Wakefit'),
+        (r'\bwake\s*feet\b', 'Wakefit'),
+        (r'\bwak\s*pit\b', 'Wakefit'),
+        (r'\bwake\s*pit\b', 'Wakefit'),
+        (r'\brake\s*fit\b', 'Wakefit'),
+        (r'\brake\s*firt\b', 'Wakefit'),
+        (r'\brak\s*fit\b', 'Wakefit'),
+        (r'\brak\s*feet\b', 'Wakefit'),
+        (r'\b[wrv][aei]k?[ec]?\s*(?:fit|pit|feet|firt|feit|feat|fert)\b', 'Wakefit'),
+        (r'\bwakefit\b', 'Wakefit'),
+    ]
+    
+    corrected_text = text
+    for pattern, replacement in patterns:
+        corrected_text = re.sub(pattern, replacement, corrected_text, flags=re.IGNORECASE)
+    
+    digit_map = {
+        'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
+        'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9',
+        'double': '', 'triple': ''
+    }
+    
+    def replace_spoken_digits(match):
+        spoken = match.group(0).lower()
+        words = spoken.split()
+        digits = []
+        i = 0
+        while i < len(words):
+            word = words[i]
+            if word in ['double', 'triple'] and i + 1 < len(words):
+                next_word = words[i + 1]
+                if next_word in digit_map and next_word not in ['double', 'triple']:
+                    repeat = 2 if word == 'double' else 3
+                    digits.append(digit_map[next_word] * repeat)
+                    i += 2
+                    continue
+            if word in digit_map and word not in ['double', 'triple']:
+                digits.append(digit_map[word])
+            i += 1
+        
+        result = ''.join(digits)
+        return result
+    
+    digit_pattern = r'\b(?:zero|one|two|three|four|five|six|seven|eight|nine|double|triple)(?:\s+(?:zero|one|two|three|four|five|six|seven|eight|nine|double|triple))*\b'
+    corrected_text = re.sub(digit_pattern, replace_spoken_digits, corrected_text, flags=re.IGNORECASE)
+    
+    email_pattern = r'\b(\w+(?:\s*dot\s*\w+)*)\s+at\s+(\w+)\s+dot\s+(\w+)\b'
+    def format_email(match):
+        local = match.group(1).replace(' dot ', '.')
+        domain = match.group(2)
+        tld = match.group(3)
+        return f"{local}@{domain}.{tld}"
+    
+    corrected_text = re.sub(email_pattern, format_email, corrected_text, flags=re.IGNORECASE)
+    
+    return corrected_text
+
+
 def transcribe_audio(s3_key, language_code='en-US'):
     """
     Transcribe audio using ElevenLabs
@@ -77,11 +157,15 @@ def transcribe_audio(s3_key, language_code='en-US'):
         model_id="scribe_v2",
         tag_audio_events=True,
         language_code=elevenlabs_lang,
-        diarize=True  # Enable speaker diarization
+        diarize=True
     )
     
     # Parse ElevenLabs response into messages
     messages = _parse_elevenlabs_transcript(transcription)
+    
+    for msg in messages:
+        if 'text' in msg:
+            msg['text'] = _word_format(msg['text'])
     
     return messages
 

@@ -98,6 +98,15 @@ The JSON must have exactly these keys:
   "key_indicators": ["<short observation supporting the sentiment scores>", ...],
   "customer_name": "<customer name if mentioned, else null>",
   "hangup_reason": "<short reason the call ended, e.g. 'Issue resolved'>",
+  "compliance_flags": [
+    {
+      "flag": "<flag name>",
+      "severity": "<HIGH|MEDIUM|LOW>",
+      "description": "<detailed description with specific context and evidence from the call>",
+      "timestamp": "<approximate time in call when detected, e.g., '02:15'>",
+      "evidence": "<direct quote or specific statement from transcript that triggered this flag>"
+    }
+  ],
   "call_matrices": {
     "issue_type": "<primary reason for the call, e.g. 'Account inquiry', 'Payment issue', 'Technical support'>",
     "resolution_status": "<Was the issue resolved? 'Resolved', 'Pending', 'Escalated', or 'Unresolved'>",
@@ -107,6 +116,29 @@ The JSON must have exactly these keys:
     "customer_intent": "<What did the customer want to achieve? Brief description>"
   }
 }
+
+COMPLIANCE FLAGS TO DETECT:
+
+**HIGH SEVERITY:**
+- "Abusive Language" - Profanity, offensive language, threats from either party
+- "Data Security Breach" - Credit card numbers, passwords, or sensitive data spoken
+- "Legal Threats" - Customer threatens lawsuit or legal action
+- "Unauthorized Commitment" - Agent promises refunds/actions beyond authority
+- "Privacy Violation" - Personal data of other customers mentioned
+
+**MEDIUM SEVERITY:**
+- "Compliance Violation" - Missing mandatory disclosures (recording notice, privacy policy)
+- "Misinformation" - Agent provides incorrect product/policy information
+- "Escalation Ignored" - Customer requests supervisor but not escalated
+- "Long Hold Time" - Customer mentions being on hold for extended period
+- "Unprofessional Behavior" - Agent rude, dismissive, or lacks empathy
+
+**LOW SEVERITY:**
+- "No Recording Notice" - Agent didn't inform customer about call recording
+- "Incomplete Information" - Agent couldn't provide complete answer to customer query
+- "Customer Satisfaction Risk" - Customer clearly dissatisfied at end of call
+
+IMPORTANT: Only include flags that are clearly evident in the transcript. If no compliance issues detected, return empty array: "compliance_flags": []
 
 SCORING GUIDELINES (0-10 scale, where 10 = best):
 
@@ -408,12 +440,21 @@ def get_call_details(call_id):
             "keyIndicators": analytics.key_indicators or [],
         }
         
+        # Add compliance flags if available
+        if analytics.raw_model_response and isinstance(analytics.raw_model_response, dict):
+            compliance_flags = analytics.raw_model_response.get("compliance_flags", [])
+            data["complianceFlags"] = compliance_flags if compliance_flags else []
+        else:
+            data["complianceFlags"] = []
+        
         # Add validation data if available (Phase 2)
         if analytics.validation_results:
             data["validation"] = analytics.validation_results
             data["validationScore"] = float(analytics.validation_score) if analytics.validation_score else 0
             data["validationPercentage"] = float(analytics.validation_percentage) if analytics.validation_percentage else 0
             data["skillLevel"] = analytics.skill_level or "Novice"
+    else:
+        data["complianceFlags"] = []
     
     return data
 
