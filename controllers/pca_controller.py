@@ -58,7 +58,7 @@ def process_upload_async(file_data, call_id, caller_name, notes, original_filena
         
         # Upload audio to S3
         update_progress(call_id, 'upload_audio', 'processing', 
-                       f"Uploading audio for {call_id} (file: {original_filename})")
+                       f"Uploading audio")
         
         # Create file object from bytes
         file_obj = BytesIO(file_data)
@@ -66,21 +66,21 @@ def process_upload_async(file_data, call_id, caller_name, notes, original_filena
         recording_s3_key = upload_audio_to_s3(file_obj, call_id)
         
         update_progress(call_id, 'upload_audio', 'completed', 
-                       f"Audio uploaded for {call_id}")
+                       f"Audio uploaded")
         
         # Transcribe audio with automatic language detection (default to English)
         update_progress(call_id, 'transcribe_audio', 'processing',
-                       f"Transcribing audio for {call_id}")
+                       f"Transcribing audio")
         
         # Use English as default, transcription will detect Hindi if present
         transcript_messages = transcribe_audio(recording_s3_key, 'en-US')
         
         update_progress(call_id, 'transcribe_audio', 'completed',
-                       f"Transcription completed for {call_id}")
+                       f"Transcription completed")
         
         # Save transcript to S3
         update_progress(call_id, 'save_transcript', 'processing',
-                       f"Saving transcript for {call_id}")
+                       f"Saving transcript")
         
         transcript_s3_key, actual_duration = save_transcript_to_s3(
             transcript_messages, 
@@ -89,7 +89,7 @@ def process_upload_async(file_data, call_id, caller_name, notes, original_filena
         )
         
         update_progress(call_id, 'save_transcript', 'completed',
-                       f"Transcript saved for {call_id}")
+                       f"Transcript saved")
         
         # Calculate timestamps
         started_at = upload_started_at
@@ -99,7 +99,7 @@ def process_upload_async(file_data, call_id, caller_name, notes, original_filena
         
         # Create call record and analyze
         update_progress(call_id, 'analyze_call', 'processing',
-                       f"Analyzing call {call_id}")
+                       f"Analyzing call")
         
         # Detect language from transcript
         detected_language = 'en-US'  # Default
@@ -129,11 +129,11 @@ def process_upload_async(file_data, call_id, caller_name, notes, original_filena
         record, analytics = pca_service.ingest_call(payload)
         
         update_progress(call_id, 'complete', 'completed',
-                       f"Upload complete for {call_id}")
+                       f"Processing complete")
         
     except Exception as e:
         update_progress(call_id, 'error', 'failed',
-                       f"Upload failed for {call_id}: {str(e)}")
+                       f"Upload failed: {str(e)}")
         import traceback
         traceback.print_exc()
 
@@ -194,7 +194,7 @@ def upload_call():
         
         # Initialize progress
         update_progress(call_id, 'initiated', 'processing', 
-                       f"Upload initiated for {call_id}")
+                       f"Upload started")
         
         # Start background processing
         thread = threading.Thread(
