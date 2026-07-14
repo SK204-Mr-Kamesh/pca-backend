@@ -24,10 +24,11 @@ def _get_s3_client():
 
 
 def _get_elevenlabs_client():
-    """Get ElevenLabs client with regional support"""
+    """Get ElevenLabs client with regional support and extended timeout"""
     return ElevenLabs(
         api_key=ELEVENLABS_API_KEY,
-        base_url=ELEVENLABS_BASE_URL
+        base_url=ELEVENLABS_BASE_URL,
+        timeout=7200.0
     )
 
 
