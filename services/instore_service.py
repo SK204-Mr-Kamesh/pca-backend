@@ -47,22 +47,38 @@ The JSON must have exactly these keys:
   "key_indicators": ["<short observation supporting the sentiment scores>", ...],
   "customer_name": "<customer name if mentioned, else null>",
   "interaction_outcome": "<short description of how the interaction ended>",
+  "products_discussed": [
+    {
+      "product_name": "<specific product name, e.g., 'OrthoLite Memory Foam Mattress'>",
+      "category": "<product category, e.g., 'Mattress', 'Storage', 'Sofa'>",
+      "sub_category": "<more specific category if mentioned>",
+      "discussion_summary": "<brief summary of what was discussed about this product>",
+      "customer_interest_level": "<High|Medium|Low>",
+      "price_discussed": "<Yes|No>",
+      "price_amount": "<price if mentioned, else null>",
+      "objections_raised": ["<list of customer objections or concerns>"],
+      "sales_outcome": "<purchased|interested|not_interested|deferred>",
+      "outcome_reason": "<why the customer made this decision>"
+    }
+  ],
   "interaction_matrices": {
     "interaction_code": "<unique identifier if mentioned, e.g., 'INT-MG-00400920'>",
-    "category": "<product category discussed, e.g., 'Storage', 'Sofa', 'Accessories', 'Mattress'>",
-    "sub_category": "<more specific category if mentioned>",
-    "product": "<specific product name discussed, e.g., 'Multipurpose Storage', 'Pillow Protector'>",
-    "sales_outcome": "<successful|unsuccessful|deferred decision>",
+    "primary_category": "<main product category discussed>",
+    "overall_sales_outcome": "<successful|unsuccessful|deferred_decision>",
     "l1_pillow": "<Customer|Examiner|Uncertainty (fluent concern)|The customer was in the phonecall pit|etc.>",
     "l2_pillow": "<Deferred decision making|Uncertainty (fluent concern)|etc.>",
     "l3_pillow": "<specific detail about customer concern or decision status>",
     "customer_intent": "<What did the customer want? Brief description>",
-    "product_interest_level": "<High|Medium|Low - based on customer engagement>",
-    "price_discussed": "<Yes|No - was pricing discussed?>",
     "competitor_mentioned": "<Yes|No - did customer mention competitors?>",
     "follow_up_required": "<Yes|No - does this need follow-up?>"
   }
 }
+
+IMPORTANT NOTES ON PRODUCTS:
+- If multiple products are discussed, create separate entries in the "products_discussed" array
+- Each product should have its own sales outcome and reason
+- Track customer interest level per product separately
+- Note specific objections for each product
 
 SCORING GUIDELINES (0-10 scale, where 10 = best):
 
@@ -115,7 +131,7 @@ def analyze_instore_interaction(messages, interaction_id=None):
                 "role": "user",
                 "content": [{"text": f"In-store interaction transcript:\n\n{conversation_text}"}]
             }],
-            inferenceConfig={"maxTokens": 2000}
+            inferenceConfig={"maxTokens": 4096} 
         )
         
         text = response["output"]["message"]["content"][0]["text"].strip()
@@ -140,21 +156,27 @@ def _parse_json(text):
     
     # Remove markdown code fences if present
     if cleaned.startswith("```"):
-        cleaned = cleaned.split("```", 2)[1] if "```" in cleaned[3:] else cleaned[3:]
-        if cleaned.startswith("json"):
-            cleaned = cleaned[4:]
+        lines = cleaned.split('\n')
+        lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        cleaned = '\n'.join(lines)
+    
+    cleaned = cleaned.strip()
     
     try:
         return json.loads(cleaned)
-    except Exception:
+    except Exception as e:
+        print(f"[InStore] JSON parse error: {e}")
         # Try to extract JSON from text
         start = cleaned.find("{")
         end = cleaned.rfind("}")
         if start != -1 and end != -1 and end > start:
             try:
-                return json.loads(cleaned[start:end + 1])
-            except Exception:
-                pass
+                extracted = cleaned[start:end + 1]
+                return json.loads(extracted)
+            except Exception as exp:
+                print(f"[InStore] Extracted JSON parse error: {exp}")
     
     print("[InStore] Could not parse model output as JSON")
     return {}

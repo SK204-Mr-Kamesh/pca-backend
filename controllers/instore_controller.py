@@ -147,10 +147,10 @@ def process_upload_async(file_data, interaction_id, customer_name, store_id, sal
                 customer_name=analysis.get('customer_name') or customer_name,
                 interaction_outcome=analysis.get('interaction_outcome'),
                 interaction_code=matrices.get('interaction_code'),
-                category=matrices.get('category'),
+                category=matrices.get('primary_category'),
                 sub_category=matrices.get('sub_category'),
                 product=matrices.get('product'),
-                sales_outcome=matrices.get('sales_outcome'),
+                sales_outcome=matrices.get('overall_sales_outcome'),
                 l1_pillow=matrices.get('l1_pillow'),
                 l2_pillow=matrices.get('l2_pillow'),
                 l3_pillow=matrices.get('l3_pillow'),
@@ -384,6 +384,7 @@ def get_interaction(interaction_id):
             'summary': '',
             'topics': [],
             'actionItems': [],
+            'productsDiscussed': [],
             'matrices': {},
             'sentiment': {
                 'overallSentiment': 0,
@@ -404,6 +405,8 @@ def get_interaction(interaction_id):
                 'salesExecutivePerformance': float(analytics.sales_executive_performance) if analytics.sales_executive_performance is not None else 0,
                 'keyIndicators': analytics.key_indicators or []
             }
+            if analytics.raw_model_response and isinstance(analytics.raw_model_response, dict):
+                data['productsDiscussed'] = analytics.raw_model_response.get('products_discussed', [])
         
         return success_response('Interaction details retrieved', data)
         
