@@ -28,7 +28,7 @@ app.config['PCA_MODEL_ID'] = os.environ.get('PCA_MODEL_ID', 'global.anthropic.cl
 # Initialize ClickHouse tables on startup
 def init_db():
     try:
-        import clickhouse_integration as ch
+        import pca_clickhouse as ch
         ch.ensure_tables()
         print("[PCA] ClickHouse initialized")
     except Exception as e:
@@ -36,7 +36,9 @@ def init_db():
 
 # Register blueprints
 from controllers.pca_controller import pca_bp
+from controllers.instore_controller import instore_bp
 app.register_blueprint(pca_bp, url_prefix='/api')
+app.register_blueprint(instore_bp, url_prefix='/api')
 
 # Initialize on startup
 with app.app_context():

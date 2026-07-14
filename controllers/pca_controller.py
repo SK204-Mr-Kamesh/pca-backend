@@ -14,7 +14,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services import pca_service
 from transcribe_service import upload_audio_to_s3, transcribe_audio, save_transcript_to_s3
-import clickhouse_integration as ch
+import pca_clickhouse as ch
+from controllers.controller_utils import success_response, error_response
 
 pca_bp = Blueprint('pca', __name__)
 
@@ -136,28 +137,6 @@ def process_upload_async(file_data, call_id, caller_name, notes, original_filena
                        f"Upload failed: {str(e)}")
         import traceback
         traceback.print_exc()
-
-
-# ── Helper functions ──────────────────────────────────────────────────────────
-
-def success_response(message, data, status_code=200):
-    """Standard success response"""
-    return jsonify({
-        'status': 'success',
-        'message': message,
-        'data': data,
-        'status_code': status_code
-    }), status_code
-
-
-def error_response(message, status_code=500, data=None):
-    """Standard error response"""
-    return jsonify({
-        'status': 'error',
-        'message': message,
-        'data': data or {},
-        'status_code': status_code
-    }), status_code
 
 
 # ── POST /api/pca/uploads ─────────────────────────────────────────────────────
@@ -444,59 +423,3 @@ def export_call_report(call_id):
     except Exception as e:
         print(f"[PCA] Export call failed: {e}")
         return error_response(f'Failed to export call: {str(e)}', 500)
-
-
-# ── POST /api/pca/calls/{callId}/chat ─────────────────────────────────────────
-
-@pca_bp.route('/pca/calls/<string:call_id>/chat', methods=['POST'])
-def chat_about_call(call_id):
-    """
-    Gen AI Assistant: ask questions about a call
-    Frontend: POST /api/pca/calls/{callId}/chat
-    Body: {"question": "..."}
-    """
-    try:
-        body = request.get_json(silent=True) or {}
-        question = (body.get('question') or body.get('query') or '').strip()
-        
-        if not question:
-            return error_response('question is required', 400)
-        
-        answer = pca_service.chat_about_call(call_id, question)
-        
-        return success_response('Answer generated', {'answer': answer})
-        
-    except Exception as e:
-        print(f"[PCA] Chat failed: {e}")
-        return error_response(f'Failed to answer: {str(e)}', 500)
-
-
-# ── POST /api/pca/ingest (internal) ───────────────────────────────────────────
-
-@pca_bp.route('/pca/ingest', methods=['POST'])
-def pca_ingest():
-    """
-    Internal endpoint for worker to push call data
-    Requires X-PCA-Secret header
-    """
-    # Check secret if configured
-    if PCA_INGEST_SECRET:
-        if request.headers.get('X-PCA-Secret', '') != PCA_INGEST_SECRET:
-            return error_response('Unauthorized', 401)
-    
-    try:
-        payload = request.get_json(silent=True) or {}
-        record, analytics = pca_service.ingest_call(payload)
-        
-        return success_response('Call ingested', {
-            'call_id': record.call_id,
-            'analyzed': analytics is not None
-        })
-        
-    except ValueError as e:
-        return error_response(str(e), 400)
-    except Exception as e:
-        print(f"[PCA] Ingest failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return error_response(f'Ingest failed: {str(e)}', 500)

@@ -10,8 +10,8 @@ import boto3
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import clickhouse_integration as ch
-from clickhouse_integration import CallRecord, CallAnalytics
+import pca_clickhouse as ch
+from pca_clickhouse import CallRecord, CallAnalytics
 from services import validation_service
 
 RECORDINGS_BUCKET = os.environ.get("S3_RECORDINGS_BUCKET", "sahaa-voiceai-recordings")
@@ -494,38 +494,6 @@ def get_agent_analytics(agent_id=None, start_date=None, end_date=None):
         "pickup_rate": round(len(answered) / total_calls * 100, 1) if total_calls else 0,
         "answered_calls": len(answered),
     }
-
-
-def chat_about_call(call_id, question):
-    """Answer a question about a completed call"""
-    record = ch.get_record(call_id)
-    if not record:
-        return "I couldn't find this call."
-
-    transcript = load_transcript_from_s3(record.transcript_s3_key) if record.transcript_s3_key else None
-    conversation = format_transcript((transcript or {}).get("messages", []))
-    analytics = ch.get_analytics(call_id)
-    analysis_ctx = json.dumps(analytics.to_dict()) if analytics else "(no analysis available)"
-
-    system = ("You are an assistant answering questions about a single completed support call. "
-              "Use the transcript and analysis provided. Be concise and factual. "
-              "If the answer isn't in the call, say so. Plain text only.")
-    user_text = (f"Call transcript:\n{conversation}\n\n"
-                 f"Existing analysis:\n{analysis_ctx}\n\n"
-                 f"Question: {question}")
-    try:
-        _, bedrock_client = _get_aws_clients()
-        resp = bedrock_client.converse(
-            modelId=PCA_MODEL_ID,
-            system=[{"text": system}],
-            messages=[{"role": "user", "content": [{"text": user_text}]}],
-            inferenceConfig={"maxTokens": 800, "temperature": 0.2},
-        )
-        return resp["output"]["message"]["content"][0]["text"].strip()
-    except Exception as e:
-        print(f"[PCA] chat_about_call failed: {e}")
-        return "Sorry, I couldn't process that right now."
-
 
 
 def delete_call(call_id):
