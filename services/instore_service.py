@@ -140,7 +140,8 @@ When customer mentions any competitor store or brand or compares Wakefit with an
   - suggestion: customer suggesting Wakefit adopt competitor's approach
   - neutral: factual comparison without emotion
 - Include exact details from customer's statement
-- Return empty array if NO competitor mentions: "competitor_intelligence": []
+- **IMPORTANT: EXCLUDE marketplace platforms (Amazon, Flipkart, eBay, etc.) - only include direct brand competitors (e.g., Sleepwell, Kurlon, Godrej, etc.)**
+- Return empty array if NO competitor mentions OR only marketplace platforms mentioned: "competitor_intelligence": []
 
 PRODUCTS DISCUSSED:
 - If multiple products are discussed, create separate entries for each product
