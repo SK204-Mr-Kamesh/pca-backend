@@ -37,8 +37,10 @@ def init_db():
 # Register blueprints
 from controllers.pca_controller import pca_bp
 from controllers.instore_controller import instore_bp
+from controllers.pca_analytics_controller import analytics_bp
 app.register_blueprint(pca_bp, url_prefix='/api')
 app.register_blueprint(instore_bp, url_prefix='/api')
+app.register_blueprint(analytics_bp, url_prefix='/api')
 
 # Initialize on startup
 with app.app_context():

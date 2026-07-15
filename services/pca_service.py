@@ -98,6 +98,9 @@ The JSON must have exactly these keys:
   "key_indicators": ["<short observation supporting the sentiment scores>", ...],
   "customer_name": "<customer name if mentioned, else null>",
   "hangup_reason": "<short reason the call ended, e.g. 'Issue resolved'>",
+  "avg_wait_time": <total seconds customer was on hold/waiting>,
+  "sla_compliance": <percentage 0-100 based on: answer within 30 seconds (25%), issue resolution within 5 minutes (50%), first call resolution (25%)>,
+  "abandonment_rate": <0 if call was answered, 100 if abandoned>,
   "learning_suggestions": "<coaching suggestion for the agent on how to improve this interaction>",
   "competitor_intelligence": [
     {
@@ -128,8 +131,72 @@ The JSON must have exactly these keys:
   }
 }
 
+ANALYTICS FIELDS EXPLANATION:
+
+**avg_wait_time**: Calculate total seconds customer was on hold/waiting
+- Count "on hold" occurrences in transcript
+- Example: If customer on hold twice for 2 minutes each = 240 seconds
+- Return: Total seconds as number
+
+**sla_compliance**: Calculate percentage (0-100) based on:
+- Answer within 30 seconds from start: 25 points
+- Issue resolution/satisfactory outcome within 5 minutes: 50 points  
+- First call resolution (no escalation needed): 25 points
+- Total = (points earned / 100) * 100 = percentage
+- Example: Answered in 15 sec (25) + resolved in 4 min (50) + no escalation (25) = 100%
+
+**abandonment_rate**: 
+- 0 = Call was answered and completed
+- 100 = Call was abandoned/dropped before completion
+
+COMPLIANCE FLAGS TO DETECT:
+
+**HIGH SEVERITY:**
+- "Abusive Language" - Profanity, offensive language, threats from either party
+- "Data Security Breach" - Credit card numbers, passwords, or sensitive data spoken
+- "Legal Threats" - Customer threatens lawsuit or legal action
+- "Unauthorized Commitment" - Agent promises refunds/actions beyond authority
+- "Privacy Violation" - Personal data of other customers mentioned
+
+**MEDIUM SEVERITY:**
+- "Compliance Violation" - Missing mandatory disclosures (recording notice, privacy policy)
+- "Misinformation" - Agent provides incorrect product/policy information
+- "Escalation Ignored" - Customer requests supervisor but not escalated
+- "Long Hold Time" - Customer mentions being on hold for extended period
+- "Unprofessional Behavior" - Agent rude, dismissive, or lacks empathy
+
+**LOW SEVERITY:**
+- "No Recording Notice" - Agent didn't inform customer about call recording
+- "Incomplete Information" - Agent couldn't provide complete answer to customer query
+- "Customer Satisfaction Risk" - Customer clearly dissatisfied at end of call
+
+IMPORTANT: Only include flags that are clearly evident in the transcript. If no compliance issues detected, return empty array: "compliance_flags": []
+
+SCORING GUIDELINES (0-10 scale, where 10 = best):
+
+**overall_sentiment**: Rate the overall tone and emotional quality of the call
+- 8-10: Positive, friendly, cooperative atmosphere throughout
+- 5-7: Neutral or mixed emotions, some tension but generally professional
+- 2-4: Negative tone, frustration, complaints, or dissatisfaction evident
+- 0-1: Highly negative, angry, hostile interaction
+
+**customer_satisfaction**: Rate how satisfied the customer appears to be
+- 8-10: Customer expresses clear satisfaction, thanks agent, issue fully resolved
+- 5-7: Customer accepts the outcome, no strong positive/negative signals
+- 2-4: Customer expresses frustration, dissatisfaction, or unresolved concerns
+- 0-1: Customer is very unhappy, threatens to escalate, or explicitly dissatisfied
+
+**agent_performance**: Rate the agent's effectiveness and professionalism
+- 8-10: Excellent communication, empathy, problem-solving, professional throughout
+- 5-7: Adequate performance, handles basic tasks but may lack polish or efficiency
+- 2-4: Poor communication, lacks empathy, struggles to help, unprofessional moments
+- 0-1: Very poor performance, rude, unable to assist, or major errors
+
+Be realistic with scores. A typical successful call should score 6-8, not perfect 10s.
+Base all ratings strictly on evidence from the transcript provided.
+
 LEARNING & DEVELOPMENT SUGGESTIONS:
-Analyze the agent's performance and suggest ONE specific improvement:
+Analyze the agents performance and suggest ONE specific improvement:
 - Focus on areas where agent could handle better next time
 - Provide actionable coaching (not generic praise)
 - Example: "The customer raised a concern at 03:40 about delivery time. Instead of saying 'that's our standard', you could have acknowledged their urgency and offered alternative solutions like expedited shipping or specific delivery date confirmation."
