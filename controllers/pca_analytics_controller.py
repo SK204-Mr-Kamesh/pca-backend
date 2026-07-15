@@ -17,16 +17,28 @@ analytics_bp = Blueprint('pca_analytics', __name__)
 @analytics_bp.route('/pca_analytics', methods=['GET'])
 def get_analytics():
     """
-    Get aggregate PCA analytics
-    Frontend: GET /api/analytics
+    Get comprehensive PCA analytics with 17 metrics
+    Frontend: GET /api/pca_analytics
     
-    Returns:
+    Returns all analytics fields:
     {
-        "total_uploads": <total call records>,
-        "ready": <calls with completed analysis>,
-        "failed": <calls pending/failed analysis>,
-        "average_call_duration_minutes": <avg duration>,
-        "average_sentiment": <avg sentiment 0-10>
+        "total_uploads": <int: total call records>,
+        "ready": <int: calls with completed analysis>,
+        "failed": <int: calls pending/failed analysis>,
+        "average_call_duration_minutes": <float: avg duration>,
+        "average_sentiment": <float: 0-10 scale>,
+        "average_customer_satisfaction": <float: 0-10 scale>,
+        "average_wait_time_seconds": <float: avg hold time>,
+        "average_sla_compliance": <float: 0-100%>,
+        "average_abandonment_rate": <float: 0-100%>,
+        "agent_effectiveness": <float: 0-10 scale>,
+        "upload_volume": [{"date": "YYYY-MM-DD", "count": <int>}, ...],
+        "sentiment_distribution": {"positive": <float>, "neutral": <float>, "negative": <float>},
+        "language_distribution": {<language>: <float %>, ...},
+        "top_topics": [{"topic": "<topic>", "count": <int>}, ...],
+        "agent_leaderboard": [{"agent_id": "<id>", "calls": <int>, "score": <float>, ...}, ...],
+        "executive_summary": ["<insight1>", "<insight2>", ...],
+        "coaching_priorities": [{"rank": <int>, "priority": "<text>", "details": "<text>", "severity": "HIGH|MED|LOW"}, ...]
     }
     """
     try:
