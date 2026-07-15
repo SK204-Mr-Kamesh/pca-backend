@@ -73,11 +73,26 @@ The JSON must have exactly these keys:
     }
   ],
   "interaction_matrices": {
-    "communication_score": "<score out of 10 based on clarity, tone, listening, professionalism>",
-    "discovery_score": "<score out of 10 based on understanding needs and asking right questions>",
-    "solution_fit_score": "<score out of 10 for how well product recommendations matched needs>",
-    "sales_execution_score": "<score out of 10 for handling objections, closing, next steps>",
-    "customer_experience_score": "<score out of 10 for overall impression - respect, value, satisfaction>",
+    "communication": {
+      "score": "<score out of 10>",
+      "evidence": "<1-2 sentences explaining why - e.g., 'Clear articulation with minimal hesitations' or 'Multiple grammatical errors and unclear phrasing'>"
+    },
+    "discovery": {
+      "score": "<score out of 10>",
+      "evidence": "<1-2 sentences explaining why - e.g., 'Asked about budget and preferences' or 'Failed to probe customer needs'>"
+    },
+    "solution_fit": {
+      "score": "<score out of 10>",
+      "evidence": "<1-2 sentences - e.g., 'Recommended products matched stated requirements' or 'Recommendations were generic'>"
+    },
+    "sales_execution": {
+      "score": "<score out of 10>",
+      "evidence": "<1-2 sentences - e.g., 'Addressed all objections professionally' or 'Failed to handle price objection'>"
+    },
+    "customer_experience": {
+      "score": "<score out of 10>",
+      "evidence": "<1-2 sentences - e.g., 'Customer felt heard and respected throughout' or 'Customer expressed frustration'>"
+    },
     "primary_category": "<main product category discussed>",
     "overall_sales_outcome": "<successful|unsuccessful|deferred_decision>",
     "customer_intent": "<What did the customer want to achieve? Brief description>",
@@ -93,7 +108,25 @@ Analyze the sales executive's performance and suggest ONE specific improvement:
 - Example: "The customer expressed concern about mattress firmness at 02:30. You could have asked follow-up questions about their sleep position and firmness preferences before recommending, which would have improved solution fit."
 - Example: "When the customer mentioned budget constraints at 04:15, instead of pushing premium models, you could have shown value-adds in mid-range options or discussed financing options to address their concern."
 - Keep suggestion concise (2-3 sentences max)
-- Only suggest improvements, not praise
+
+EVIDENCE FORMAT FOR INTERACTION MATRICES:
+For each score (communication, discovery, solution_fit, sales_execution, customer_experience), provide concise evidence:
+- State what happened (factual observation)
+- Do NOT explain why it's good/bad
+- Do NOT provide coaching (save that for learning_suggestions)
+- Keep to 1-2 sentences MAX
+- Reference specific timestamps or direct quotes if possible
+
+Examples of GOOD evidence:
+✓ "Sales executive asked about sleep position and preferences at 02:15 before recommending"
+✓ "Multiple grammatical errors and hesitations throughout; unclear communication at 01:30"
+✓ "Customer objected about price at 04:45; executive offered financing option immediately"
+✓ "Customer left without making decision; no next steps defined"
+
+Examples of BAD evidence:
+✗ "The sales executive demonstrated excellent communication skills by clearly articulating product features"
+✗ "Poor sales technique resulted in customer dissatisfaction"
+✗ "Executive did well with objection handling"- Only suggest improvements, not praise
 
 COMPETITOR INTELLIGENCE EXTRACTION FOR RETAIL:
 When customer mentions any competitor store or brand or compares Wakefit with another furniture/mattress brand:

@@ -411,6 +411,8 @@ def get_interaction(interaction_id):
                 data['learningSuggestions'] = learning_suggestions if learning_suggestions else ""
                 competitor_intelligence = analytics.raw_model_response.get('competitor_intelligence', [])
                 data['competitorIntelligence'] = competitor_intelligence if competitor_intelligence else []
+                interaction_matrices = analytics.raw_model_response.get('interaction_matrices', {})
+                data['interactionMatrices'] = interaction_matrices if interaction_matrices else {}
         
         return success_response('Interaction details retrieved', data)
         
