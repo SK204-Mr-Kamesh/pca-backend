@@ -98,6 +98,17 @@ The JSON must have exactly these keys:
   "key_indicators": ["<short observation supporting the sentiment scores>", ...],
   "customer_name": "<customer name if mentioned, else null>",
   "hangup_reason": "<short reason the call ended, e.g. 'Issue resolved'>",
+  "learning_suggestions": "<coaching suggestion for the agent on how to improve this interaction>",
+  "competitor_intelligence": [
+    {
+      "competitor_name": "<company name if mentioned by customer, else null>",
+      "product_mentioned": "<product/feature mentioned in comparison, else null>",
+      "comparison_type": "<what aspect was compared: cheaper|better_feature|quality|service|other>",
+      "customer_sentiment": "<appreciation|complaint|query|suggestion|neutral>",
+      "details": "<brief description of what the customer said about competitor>",
+      "timestamp": "<approximate time in call when mentioned>"
+    }
+  ],
   "compliance_flags": [
     {
       "flag": "<flag name>",
@@ -116,6 +127,24 @@ The JSON must have exactly these keys:
     "customer_intent": "<What did the customer want to achieve? Brief description>"
   }
 }
+
+LEARNING & DEVELOPMENT SUGGESTIONS:
+Analyze the agent's performance and suggest ONE specific improvement:
+- Focus on areas where agent could handle better next time
+- Provide actionable coaching (not generic praise)
+- Example: "The customer raised a concern at 03:40 about delivery time. Instead of saying 'that's our standard', you could have acknowledged their urgency and offered alternative solutions like expedited shipping or specific delivery date confirmation."
+- Keep suggestion concise (2-3 sentences max)
+- Only suggest improvements, not praise
+
+COMPETITOR INTELLIGENCE EXTRACTION:
+When customer mentions any competitor company or compares Wakefit with another brand:
+- Extract competitor company name exactly as stated
+- Extract specific product/feature mentioned (e.g., "memory foam", "warranty", "price")
+- Classify comparison type: cheaper, better_feature, quality, service, or other
+- Classify customer sentiment: appreciation (customer liked competitor), complaint (customer dissatisfied with competitor), query (customer asking questions), suggestion (customer suggesting Wakefit adopt something), neutral (factual comparison)
+- Include exact details from customer's statement
+- Include timestamp of mention
+- Return empty array if NO competitor mentions: "competitor_intelligence": []
 
 COMPLIANCE FLAGS TO DETECT:
 
@@ -173,7 +202,7 @@ def _invoke_bedrock_analysis(conversation_text):
             modelId=PCA_MODEL_ID,
             system=[{"text": _ANALYSIS_SYSTEM_PROMPT}],
             messages=[{"role": "user", "content": [{"text": f"Call transcript:\n\n{conversation_text}"}]}],
-            inferenceConfig={"maxTokens": 2000},
+            inferenceConfig={"maxTokens": 4096},
         )
         text = resp["output"]["message"]["content"][0]["text"].strip()
         return _parse_json(text)
@@ -446,6 +475,20 @@ def get_call_details(call_id):
             data["complianceFlags"] = compliance_flags if compliance_flags else []
         else:
             data["complianceFlags"] = []
+        
+        # Add learning suggestions if available
+        if analytics.raw_model_response and isinstance(analytics.raw_model_response, dict):
+            learning_suggestions = analytics.raw_model_response.get("learning_suggestions")
+            data["learningSuggestions"] = learning_suggestions if learning_suggestions else ""
+        else:
+            data["learningSuggestions"] = ""
+        
+        # Add competitor intelligence if available
+        if analytics.raw_model_response and isinstance(analytics.raw_model_response, dict):
+            competitor_intelligence = analytics.raw_model_response.get("competitor_intelligence", [])
+            data["competitorIntelligence"] = competitor_intelligence if competitor_intelligence else []
+        else:
+            data["competitorIntelligence"] = []
         
         # Add validation data if available (Phase 2)
         if analytics.validation_results:

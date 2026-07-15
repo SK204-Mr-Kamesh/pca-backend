@@ -407,6 +407,10 @@ def get_interaction(interaction_id):
             }
             if analytics.raw_model_response and isinstance(analytics.raw_model_response, dict):
                 data['productsDiscussed'] = analytics.raw_model_response.get('products_discussed', [])
+                learning_suggestions = analytics.raw_model_response.get('learning_suggestions')
+                data['learningSuggestions'] = learning_suggestions if learning_suggestions else ""
+                competitor_intelligence = analytics.raw_model_response.get('competitor_intelligence', [])
+                data['competitorIntelligence'] = competitor_intelligence if competitor_intelligence else []
         
         return success_response('Interaction details retrieved', data)
         
