@@ -13,6 +13,13 @@ AWS_REGION = os.environ.get("AWS_REGION", "ap-south-1")
 PCA_MODEL_ID = os.environ.get("PCA_MODEL_ID", "global.anthropic.claude-haiku-4-5-20251001-v1:0")
 
 
+def _round_float(value, decimals=2):
+    """Round float values to specified decimal places"""
+    if isinstance(value, (int, float)):
+        return round(float(value), decimals)
+    return value
+
+
 def _get_bedrock_client():
     """Get AWS Bedrock client"""
     return boto3.client(
@@ -48,8 +55,8 @@ def get_pca_analytics():
         
         # Basic metrics
         durations = [r.duration_seconds or 0 for r in all_records if r.duration_seconds]
-        average_duration_seconds = sum(durations) / len(durations) if durations else 0
-        average_call_duration_minutes = round(average_duration_seconds / 60, 2)
+        average_duration_seconds = sum(durations) / len(durations) if durations else 0.0
+        average_call_duration_minutes = average_duration_seconds / 60
         
         # Initialize collections
         sentiments = []
@@ -62,6 +69,7 @@ def get_pca_analytics():
         languages = []
         agent_scores = {}  # For leaderboard
         agent_performance_details = {}  # For coaching priorities
+        coaching_priorities_all = []  # Collect all coaching priorities
         
         for call_id, analytics in analytics_map.items():
             # Find corresponding record for agent_id
@@ -126,6 +134,11 @@ def get_pca_analytics():
                 learning_suggestions = analytics.raw_model_response.get('learning_suggestions')
                 if learning_suggestions:
                     agent_performance_details[agent_id]['issues'].append(learning_suggestions)
+                
+                # Coaching priorities
+                coaching_priorities = analytics.raw_model_response.get('coaching_priorities', [])
+                if coaching_priorities and isinstance(coaching_priorities, list):
+                    coaching_priorities_all.extend(coaching_priorities)
             
             # Customer satisfaction
             csat = None
@@ -178,13 +191,13 @@ def get_pca_analytics():
                 except (TypeError, ValueError):
                     pass
         
-        # Calculate averages
-        average_sentiment = round(sum(sentiments) / len(sentiments), 2) if sentiments else 0
-        average_customer_satisfaction = round(sum(customer_satisfactions) / len(customer_satisfactions), 2) if customer_satisfactions else 0
-        average_wait_time_seconds = round(sum(wait_times) / len(wait_times), 2) if wait_times else 0
-        average_sla_compliance = round(sum(sla_compliances) / len(sla_compliances), 2) if sla_compliances else 0
-        average_abandonment_rate = round(sum(abandonment_rates) / len(abandonment_rates), 2) if abandonment_rates else 0
-        agent_effectiveness = round(sum(agent_performances) / len(agent_performances), 2) if agent_performances else 0
+        # Calculate averages (keep as precise floats)
+        average_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0.0
+        average_customer_satisfaction = sum(customer_satisfactions) / len(customer_satisfactions) if customer_satisfactions else 0.0
+        average_wait_time_seconds = sum(wait_times) / len(wait_times) if wait_times else 0.0
+        average_sla_compliance = sum(sla_compliances) / len(sla_compliances) if sla_compliances else 0.0
+        average_abandonment_rate = sum(abandonment_rates) / len(abandonment_rates) if abandonment_rates else 0.0
+        agent_effectiveness = sum(agent_performances) / len(agent_performances) if agent_performances else 0.0
         
         # Upload volume (per day for last 7 days)
         upload_volume = _get_upload_volume_trend(all_records)
@@ -209,31 +222,54 @@ def get_pca_analytics():
             len(analytics_map)
         )
         
-        # Top coaching priorities
-        coaching_priorities = _get_coaching_priorities(agent_performance_details, agent_scores)
+        # Top coaching priorities (try raw data first, fallback to analysis)
+        coaching_priorities = _get_coaching_priorities_from_raw_data(coaching_priorities_all)
+        if not coaching_priorities:
+            coaching_priorities = _get_coaching_priorities(agent_performance_details, agent_scores)
         
-        # AI Quality Scorecard (8 metrics across key areas)
-        quality_scorecard = _get_quality_scorecard(analytics_map)
+        # AI Quality Scorecard (8 metrics per agent)
+        quality_scorecard = _get_quality_scorecard(analytics_map, records_map)
         
         return {
             'total_uploads': total_uploads,
             'ready': ready,
             'failed': failed,
-            'average_call_duration_minutes': average_call_duration_minutes,
-            'average_sentiment': average_sentiment,
-            'average_customer_satisfaction': average_customer_satisfaction,
-            'average_wait_time_seconds': average_wait_time_seconds,
-            'average_sla_compliance': average_sla_compliance,
-            'average_abandonment_rate': average_abandonment_rate,
-            'agent_effectiveness': agent_effectiveness,
+            'average_call_duration_minutes': _round_float(average_call_duration_minutes),
+            'average_sentiment': _round_float(average_sentiment),
+            'average_customer_satisfaction': _round_float(average_customer_satisfaction),
+            'average_wait_time_seconds': _round_float(average_wait_time_seconds),
+            'average_sla_compliance': _round_float(average_sla_compliance),
+            'average_abandonment_rate': _round_float(average_abandonment_rate),
+            'agent_effectiveness': _round_float(agent_effectiveness),
             'upload_volume': upload_volume,
-            'sentiment_distribution': sentiment_distribution,
-            'language_distribution': language_distribution,
+            'sentiment_distribution': {
+                'positive': _round_float(sentiment_distribution['positive']),
+                'neutral': _round_float(sentiment_distribution['neutral']),
+                'negative': _round_float(sentiment_distribution['negative'])
+            },
+            'language_distribution': {lang: _round_float(pct) for lang, pct in language_distribution.items()},
             'top_topics': top_topics,
-            'agent_leaderboard': leaderboard,
+            'agent_leaderboard': [{
+                **agent,
+                'score': _round_float(agent['score']),
+                'csat': _round_float(agent['csat']),
+                'fcr': _round_float(agent['fcr']),
+                'compliance': _round_float(agent['compliance']),
+                'sentiment': _round_float(agent['sentiment'])
+            } for agent in leaderboard],
             'executive_summary': executive_summary,
             'coaching_priorities': coaching_priorities,
-            'quality_scorecard': quality_scorecard
+            'quality_scorecard': [{
+                **scorecard,
+                'greeting': _round_float(scorecard['greeting']),
+                'understanding': _round_float(scorecard['understanding']),
+                'crm_validation': _round_float(scorecard['crm_validation']),
+                'communication': _round_float(scorecard['communication']),
+                'soft_skills': _round_float(scorecard['soft_skills']),
+                'compliance': _round_float(scorecard['compliance']),
+                'resolution': _round_float(scorecard['resolution']),
+                'closing': _round_float(scorecard['closing'])
+            } for scorecard in quality_scorecard]
         }
         
     except Exception as e:
@@ -263,16 +299,7 @@ def _get_empty_analytics():
         'agent_leaderboard': [],
         'executive_summary': [],
         'coaching_priorities': [],
-        'quality_scorecard': {
-            'greeting': 0.0,
-            'understanding': 0.0,
-            'crm_validation': 0.0,
-            'communication': 0.0,
-            'soft_skills': 0.0,
-            'compliance': 0.0,
-            'resolution': 0.0,
-            'closing': 0.0
-        }
+        'quality_scorecard': []
     }
 
 
@@ -295,19 +322,37 @@ def _get_upload_volume_trend(records):
 
 
 def _get_sentiment_distribution(sentiments):
-    """Categorize sentiments into positive/neutral/negative"""
+    """Categorize sentiments into positive/neutral/negative with corrected thresholds"""
     if not sentiments:
         return {'positive': 0, 'neutral': 0, 'negative': 0}
     
+    # Fixed thresholds: positive ≥7, neutral 3-7, negative <3
     positive = sum(1 for s in sentiments if s >= 7)
-    negative = sum(1 for s in sentiments if s <= 3)
-    neutral = len(sentiments) - positive - negative
+    negative = sum(1 for s in sentiments if s < 3)  
+    neutral = sum(1 for s in sentiments if 3 <= s < 7)
     
     total = len(sentiments)
+    
+    # Calculate percentages (keep as precise floats)
+    pos_pct = (positive / total) * 100 if total > 0 else 0.0
+    neg_pct = (negative / total) * 100 if total > 0 else 0.0
+    neu_pct = (neutral / total) * 100 if total > 0 else 0.0
+    
+    # Adjust for rounding to ensure total = 100% (keep precise floats)
+    total_pct = pos_pct + neg_pct + neu_pct
+    if total_pct != 100.0 and total > 0:
+        # Adjust the largest percentage to make total = 100%
+        if pos_pct >= neg_pct and pos_pct >= neu_pct:
+            pos_pct += (100.0 - total_pct)
+        elif neg_pct >= neu_pct:
+            neg_pct += (100.0 - total_pct)
+        else:
+            neu_pct += (100.0 - total_pct)
+    
     return {
-        'positive': round((positive / total) * 100, 1) if total > 0 else 0,
-        'neutral': round((neutral / total) * 100, 1) if total > 0 else 0,
-        'negative': round((negative / total) * 100, 1) if total > 0 else 0
+        'positive': pos_pct,
+        'neutral': neu_pct,
+        'negative': neg_pct
     }
 
 
@@ -320,21 +365,241 @@ def _get_language_distribution(languages):
     total = len(languages)
     
     return {
-        lang: round((count / total) * 100, 1) 
+        lang: (count / total) * 100 
         for lang, count in language_counts.most_common()
     }
 
 
-def _get_top_topics(topics_list):
-    """Get top 5 most common topics"""
+def _normalize_topics(topics_list):
+    """
+    Normalize topic names to standard taxonomy for consistent analytics
+    """
     if not topics_list:
         return []
     
-    topic_counts = Counter(topics_list)
-    return [
-        {'topic': topic, 'count': count}
-        for topic, count in topic_counts.most_common(5)
-    ]
+    # Define topic normalization mapping
+    topic_mapping = {
+        # Delivery Issues
+        'delivery delay': 'Delivery Delay',
+        'late delivery': 'Delivery Delay',
+        'delayed delivery': 'Delivery Delay', 
+        'shipment delay': 'Delivery Delay',
+        'order delay': 'Delivery Delay',
+        'delayed order': 'Delivery Delay',
+        
+        'delivery damage': 'Delivery Damaged',
+        'damaged delivery': 'Delivery Damaged',
+        'broken product': 'Delivery Damaged',
+        'damaged goods': 'Delivery Damaged',
+        
+        'wrong address': 'Delivery Wrong Address',
+        'address issue': 'Delivery Wrong Address',
+        'delivery address': 'Delivery Wrong Address',
+        
+        'missed delivery': 'Delivery Missed',
+        'delivery attempt': 'Delivery Missed',
+        'failed delivery': 'Delivery Missed',
+        
+        'delivery reschedule': 'Delivery Rescheduling',
+        'reschedule delivery': 'Delivery Rescheduling',
+        'change delivery': 'Delivery Rescheduling',
+        
+        # Payment & Refunds
+        'refund': 'Refund Request',
+        'money back': 'Refund Request', 
+        'return money': 'Refund Request',
+        'get refund': 'Refund Request',
+        'refund query': 'Refund Request',
+        
+        'payment problem': 'Payment Issue',
+        'payment failed': 'Payment Issue',
+        'payment error': 'Payment Issue',
+        'transaction issue': 'Payment Issue',
+        
+        'billing question': 'Billing Query',
+        'invoice query': 'Billing Query',
+        'bill inquiry': 'Billing Query',
+        
+        'price match': 'Price Match Request',
+        'lower price': 'Price Match Request',
+        
+        # Product Issues  
+        'product quality': 'Product Quality Issue',
+        'quality issue': 'Product Quality Issue',
+        'defective product': 'Product Quality Issue',
+        'product defect': 'Product Quality Issue',
+        'comfort issue': 'Product Quality Issue',
+        'product problem': 'Product Quality Issue',
+        
+        'size issue': 'Product Size Issue',
+        'wrong size': 'Product Size Issue',
+        'size problem': 'Product Size Issue',
+        'dimension issue': 'Product Size Issue',
+        
+        'product exchange': 'Product Exchange',
+        'exchange product': 'Product Exchange',
+        'change product': 'Product Exchange',
+        
+        'product info': 'Product Information',
+        'product details': 'Product Information',
+        'specification': 'Product Information',
+        'product question': 'Product Information',
+        
+        'assembly': 'Assembly Issue',
+        'installation': 'Assembly Issue',
+        'setup issue': 'Assembly Issue',
+        
+        # Order Management
+        'order status': 'Order Status Inquiry',
+        'track order': 'Order Status Inquiry',
+        'order tracking': 'Order Status Inquiry',
+        'where is order': 'Order Status Inquiry',
+        'order inquiry': 'Order Status Inquiry',
+        
+        'cancel order': 'Order Cancellation',
+        'order cancel': 'Order Cancellation',
+        'cancellation': 'Order Cancellation',
+        
+        'modify order': 'Order Modification',
+        'change order': 'Order Modification',
+        'order change': 'Order Modification',
+        'update order': 'Order Modification',
+        
+        'new order': 'New Order Placement',
+        'place order': 'New Order Placement',
+        'order placement': 'New Order Placement',
+        
+        # Technical Support
+        'website problem': 'Website Issue',
+        'app issue': 'Website Issue',
+        'site not working': 'Website Issue',
+        'technical issue': 'Website Issue',
+        
+        'login issue': 'Account Access',
+        'account problem': 'Account Access',
+        'password issue': 'Account Access',
+        'cant login': 'Account Access',
+        
+        'warranty': 'Warranty Claim',
+        'warranty claim': 'Warranty Claim',
+        'warranty issue': 'Warranty Claim',
+        
+        'installation help': 'Installation Support',
+        'setup help': 'Installation Support',
+        'how to install': 'Installation Support',
+        
+        # General
+        'general question': 'General Inquiry',
+        'inquiry': 'General Inquiry',
+        'information': 'General Inquiry',
+        
+        'complaint': 'Complaint Escalation',
+        'escalation': 'Complaint Escalation',
+        'manager request': 'Complaint Escalation',
+        
+        'feedback': 'Feedback/Review',
+        'review': 'Feedback/Review',
+        'suggestion': 'Feedback/Review',
+    }
+    
+    normalized_topics = []
+    
+    for topic in topics_list:
+        if not topic:
+            continue
+            
+        # Keep order IDs and preserve case for them
+        order_id_part = ""
+        topic_clean = topic
+        if " - #" in topic or " #" in topic:
+            parts = topic.split(" - #") if " - #" in topic else topic.split(" #")
+            if len(parts) == 2:
+                topic_clean = parts[0]
+                order_id_part = f" - #{parts[1]}"
+        
+        # Normalize the topic part (case-insensitive matching)
+        topic_lower = topic_clean.lower().strip()
+        
+        # Find best match in mapping
+        normalized_topic = None
+        for key, value in topic_mapping.items():
+            if key in topic_lower or topic_lower in key:
+                normalized_topic = value
+                break
+        
+        # If no match found, try to find partial matches for standard topics
+        if not normalized_topic:
+            standard_topics = [
+                'Delivery Delay', 'Delivery Damaged', 'Delivery Wrong Address', 'Delivery Missed', 'Delivery Rescheduling',
+                'Refund Request', 'Payment Issue', 'Billing Query', 'Price Match Request',
+                'Product Quality Issue', 'Product Size Issue', 'Product Exchange', 'Product Information', 'Assembly Issue',
+                'Order Status Inquiry', 'Order Cancellation', 'Order Modification', 'New Order Placement',
+                'Website Issue', 'Account Access', 'Warranty Claim', 'Installation Support',
+                'General Inquiry', 'Complaint Escalation', 'Feedback/Review'
+            ]
+            
+            for standard_topic in standard_topics:
+                if any(word in topic_lower for word in standard_topic.lower().split()):
+                    normalized_topic = standard_topic
+                    break
+        
+        # Use original topic if no normalization found
+        if not normalized_topic:
+            normalized_topic = topic_clean
+        
+        # Add back order ID if present
+        final_topic = normalized_topic + order_id_part
+        
+        # Keep ALL instances (including duplicates) for proper counting
+        normalized_topics.append(final_topic)
+    
+    return normalized_topics
+
+
+def _get_all_topics_from_database():
+    """
+    Get all topics from all call records in the database
+    Returns normalized topic counts from all calls
+    """
+    try:
+        # Get all analytics records from database
+        all_records, _ = ch.query_records(agent_id=None, page=0, limit=999999)
+        call_ids = [r.call_id for r in all_records]
+        analytics_map = ch.get_analytics_map(call_ids)
+        
+        # Collect all topics from all calls
+        all_topics = []
+        
+        for call_id, analytics in analytics_map.items():
+            if analytics.raw_model_response and isinstance(analytics.raw_model_response, dict):
+                topics = analytics.raw_model_response.get('topics', [])
+                if topics and isinstance(topics, list):
+                    all_topics.extend(topics)
+        
+        # Apply normalization
+        normalized_topics = _normalize_topics(all_topics)
+        
+        # Count occurrences
+        topic_counts = Counter(normalized_topics)
+        
+        # Return top 5 most common
+        top_topics = [
+            {'topic': topic, 'count': count}
+            for topic, count in topic_counts.most_common(5)
+        ]
+        
+        return top_topics
+        
+    except Exception as e:
+        return []
+
+
+def _get_top_topics(topics_list):
+    """
+    Get top 5 most common topics from database (ignores topics_list parameter)
+    Now queries database directly for accurate counts
+    """
+    return _get_all_topics_from_database()
 
 
 def _get_agent_leaderboard(agent_scores):
@@ -342,23 +607,28 @@ def _get_agent_leaderboard(agent_scores):
     leaderboard = []
     
     for agent_id, scores in agent_scores.items():
-        avg_score = round(sum(scores['performance_scores']) / len(scores['performance_scores']), 1) if scores['performance_scores'] else 0
-        avg_csat = round(sum(scores['satisfaction_scores']) / len(scores['satisfaction_scores']), 1) if scores['satisfaction_scores'] else 0
-        avg_sla = round(sum(scores['sla_scores']) / len(scores['sla_scores']), 1) if scores['sla_scores'] else 0
-        avg_sentiment = round(sum(scores['sentiment_scores']) / len(scores['sentiment_scores']), 1) if scores['sentiment_scores'] else 0
-        compliance_rate = round(((scores['calls'] - scores['compliance_count']) / scores['calls']) * 100, 1) if scores['calls'] > 0 else 0
+        avg_score = sum(scores['performance_scores']) / len(scores['performance_scores']) if scores['performance_scores'] else 0.0
+        avg_csat = sum(scores['satisfaction_scores']) / len(scores['satisfaction_scores']) if scores['satisfaction_scores'] else 0.0
+        avg_sla = sum(scores['sla_scores']) / len(scores['sla_scores']) if scores['sla_scores'] else 0.0
+        avg_sentiment = sum(scores['sentiment_scores']) / len(scores['sentiment_scores']) if scores['sentiment_scores'] else 0.0
+        
+        # Fix compliance rate calculation - should be percentage of calls WITHOUT violations
+        total_calls = scores['calls']
+        violation_calls = min(scores['compliance_count'], total_calls)  # Can't exceed total calls
+        clean_calls = total_calls - violation_calls
+        compliance_rate = (clean_calls / total_calls) * 100 if total_calls > 0 else 100.0
         
         leaderboard.append({
             'agent_id': agent_id,
             'calls': scores['calls'],
-            'score': avg_score,
-            'csat': avg_csat,
-            'fcr': avg_sla,  # First Call Resolution
-            'compliance': compliance_rate,
-            'sentiment': avg_sentiment
+            'score': _round_float(avg_score),
+            'csat': _round_float(avg_csat),
+            'fcr': _round_float(avg_sla),  # First Call Resolution
+            'compliance': _round_float(max(0.0, min(100.0, compliance_rate))),  # Ensure 0-100 range
+            'sentiment': _round_float(avg_sentiment)
         })
     
-    # Sort by score descending
+    # Sort by score descending (keep as float)
     return sorted(leaderboard, key=lambda x: x['score'], reverse=True)[:10]
 
 
@@ -370,21 +640,21 @@ def _get_executive_summary(sentiments, sla_compliances, abandonment_rates, total
     
     try:
         # Prepare data summary for LLM
-        avg_sentiment = round(sum(sentiments) / len(sentiments), 2) if sentiments else 0
+        avg_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0.0
         negative_count = sum(1 for s in sentiments if s <= 3) if sentiments else 0
-        negative_pct = round((negative_count / len(sentiments)) * 100, 1) if sentiments else 0
+        negative_pct = (negative_count / len(sentiments)) * 100 if sentiments else 0.0
         positive_count = sum(1 for s in sentiments if s >= 7) if sentiments else 0
-        positive_pct = round((positive_count / len(sentiments)) * 100, 1) if sentiments else 0
+        positive_pct = (positive_count / len(sentiments)) * 100 if sentiments else 0.0
         
-        avg_sla = round(sum(sla_compliances) / len(sla_compliances), 2) if sla_compliances else 0
+        avg_sla = sum(sla_compliances) / len(sla_compliances) if sla_compliances else 0.0
         high_sla_count = sum(1 for s in sla_compliances if s >= 80) if sla_compliances else 0
-        high_sla_pct = round((high_sla_count / len(sla_compliances)) * 100, 1) if sla_compliances else 0
+        high_sla_pct = (high_sla_count / len(sla_compliances)) * 100 if sla_compliances else 0.0
         low_sla_count = sum(1 for s in sla_compliances if s < 60) if sla_compliances else 0
-        low_sla_pct = round((low_sla_count / len(sla_compliances)) * 100, 1) if sla_compliances else 0
+        low_sla_pct = (low_sla_count / len(sla_compliances)) * 100 if sla_compliances else 0.0
         
-        avg_abandonment = round(sum(abandonment_rates) / len(abandonment_rates), 2) if abandonment_rates else 0
+        avg_abandonment = sum(abandonment_rates) / len(abandonment_rates) if abandonment_rates else 0.0
         abandoned_count = sum(1 for a in abandonment_rates if a > 0) if abandonment_rates else 0
-        abandoned_pct = round((abandoned_count / len(abandonment_rates)) * 100, 1) if abandonment_rates else 0
+        abandoned_pct = (abandoned_count / len(abandonment_rates)) * 100 if abandonment_rates else 0.0
         
         # Create context for LLM
         data_context = f"""
@@ -440,18 +710,67 @@ Return ONLY a JSON array of strings (no markdown, no extra text):
             except json.JSONDecodeError:
                 pass
         
-        print("[Analytics] Failed to parse LLM executive summary, returning empty")
         return []
         
     except Exception as e:
-        print(f"[Analytics] Executive summary generation failed: {e}")
-        import traceback
-        traceback.print_exc()
         return []
 
 
+def _get_coaching_priorities_from_raw_data(coaching_priorities_all):
+    """
+    Aggregate coaching priorities from all calls
+    Returns top 5 priorities with count and average score
+    """
+    if not coaching_priorities_all:
+        return []
+    
+    priority_map = {}
+    
+    for priority_item in coaching_priorities_all:
+        if isinstance(priority_item, dict):
+            priority_name = priority_item.get('priority', 'Unknown')
+            score = priority_item.get('score', 0)
+            
+            if priority_name not in priority_map:
+                priority_map[priority_name] = {
+                    'priority': priority_name,
+                    'count': 0,
+                    'total_score': 0,
+                    'examples': []
+                }
+            
+            priority_map[priority_name]['count'] += 1
+            priority_map[priority_name]['total_score'] += float(score) if score else 0
+            if 'evidence' in priority_item:
+                priority_map[priority_name]['examples'].append(priority_item['evidence'])
+    
+    # Calculate average scores and sort by count (most frequent first)
+    result = []
+    for priority_data in priority_map.values():
+        avg_score = priority_data['total_score'] / priority_data['count'] if priority_data['count'] > 0 else 0.0
+        result.append({
+            'rank': 0,  # Will be set later
+            'priority': priority_data['priority'],
+            'count': priority_data['count'],
+            'avg_score': avg_score,
+            'details': f"Found in {priority_data['count']} calls, avg score: {avg_score}/10",
+            'severity': 'HIGH' if avg_score < 5 else 'MED' if avg_score < 7 else 'LOW'
+        })
+    
+    # Sort by count (descending) and take top 5
+    result.sort(key=lambda x: x['count'], reverse=True)
+    
+    # Set ranks
+    for i, item in enumerate(result[:5]):
+        item['rank'] = i + 1
+    
+    return result[:5]
+
+
 def _get_coaching_priorities(agent_performance_details, agent_scores):
-    """Generate top coaching priorities based on actual agent performance"""
+    """
+    Generate top coaching priorities based on actual agent performance (Fallback method)
+    """
     priorities = []
     
     # Find low performers (agents with performance < 6)
@@ -463,7 +782,7 @@ def _get_coaching_priorities(agent_performance_details, agent_scores):
             avg_perf = sum(perf_scores) / len(perf_scores) if perf_scores else 0
             low_performers.append({
                 'agent_id': agent_id,
-                'performance': round(avg_perf, 1),
+                'performance': avg_perf,
                 'issues': details['issues'],
                 'calls': scores.get('calls', 0)
             })
@@ -473,9 +792,9 @@ def _get_coaching_priorities(agent_performance_details, agent_scores):
     
     # Generate priority 1: Low performers
     if low_performers:
-        worst_agent = low_performers[0]
         agent_count = len(low_performers)
-        details_text = f"{agent_count} agent(s), avg score {round(sum(a['performance'] for a in low_performers) / len(low_performers), 1)}/10"
+        avg_perf = sum(a['performance'] for a in low_performers) / len(low_performers)
+        details_text = f"{agent_count} agent(s), avg score {avg_perf}/10"
         priorities.append({
             'rank': 1,
             'priority': 'Low performance agents',
@@ -548,7 +867,7 @@ def _get_coaching_priorities(agent_performance_details, agent_scores):
                 priorities.append({
                     'rank': 5,
                     'priority': 'Peer mentoring program',
-                    'details': f"Agent {top_agent_id} (CSAT {round(avg_csat, 1)}/10) — excellent candidate for mentoring role",
+                    'details': f"Agent {top_agent_id} (CSAT {avg_csat}/10) — excellent candidate for mentoring role",
                     'severity': 'MED'
                 })
     
@@ -569,122 +888,140 @@ def _get_coaching_priorities(agent_performance_details, agent_scores):
     return priorities[:5]
 
 
-def _get_quality_scorecard(analytics_map):
+def _get_quality_scorecard(analytics_map, records_map=None):
     """
-    Generate AI Quality Scorecard with 8 key performance metrics
+    Generate AI Quality Scorecard with 8 key performance metrics PER AGENT
     
-    Scorecard metrics (0-10 scale):
-    1. Greeting - From validation greetings score
-    2. Understanding - From validation discovery/CRM paraphrase
-    3. CRM Validation - From validation probing accuracy
-    4. Communication - From validation communication score
-    5. Soft Skills - Aggregate soft skills compliance
-    6. Compliance - From compliance flags violations
-    7. Resolution - From validation closing/resolution
-    8. Closing - From validation correct_closing
+    Scorecard metrics (0-100 scale):
+    1. Greeting - From validation greetings score (0-5 → 0-100)
+    2. Understanding - From validation CRM paraphrase (0-5 → 0-100)
+    3. CRM Validation - From validation probing accuracy (0-12 → 0-100)
+    4. Communication - From validation energy/grammar average (0-5 → 0-100)
+    5. Soft Skills - From validation empathy/listening average (0-5 → 0-100)
+    6. Compliance - From validation hold process (0-6 → 0-100)
+    7. Resolution - From validation percentage (0-100)
+    8. Closing - From validation correct_closing (0-6 → 0-100)
+    
+    Returns: Array of per-agent scorecards
     """
     
     if not analytics_map:
-        return {}
+        return []
     
-    # Initialize metric collections
-    metrics = {
-        'greeting': [],
-        'understanding': [],
-        'crm_validation': [],
-        'communication': [],
-        'soft_skills': [],
-        'compliance': [],
-        'resolution': [],
-        'closing': []
-    }
+    # Group metrics by agent_id
+    agent_metrics = {}
     
     for call_id, analytics in analytics_map.items():
+        # Get agent_id from records_map if available
+        agent_id = "Unknown"
+        if records_map and call_id in records_map:
+            agent_id = records_map[call_id].agent_id or "Unknown"
+        
+        # Initialize agent metrics if not exists
+        if agent_id not in agent_metrics:
+            agent_metrics[agent_id] = {
+                'greeting': [],
+                'understanding': [],
+                'crm_validation': [],
+                'communication': [],
+                'soft_skills': [],
+                'compliance': [],
+                'resolution': [],
+                'closing': [],
+                'calls': 0
+            }
+        
+        agent_metrics[agent_id]['calls'] += 1
+        
         # Extract validation data if available
         if analytics.validation_results and isinstance(analytics.validation_results, dict):
             validation = analytics.validation_results.get('validation', {})
             
-            # 1. Greeting - From validation greetings marking
+            # 1. Greeting (0-5 → 0-100)
             greetings = validation.get('greetings', {})
-            if 'score' in greetings:
-                score = greetings['score']
-                if isinstance(score, (int, float)):
-                    # Normalize 0-5 to 0-10
-                    normalized = (score / 5) * 10 if score > 0 else 0
-                    metrics['greeting'].append(min(10, round(normalized, 1)))
+            if 'score' in greetings and greetings['score'] is not None:
+                score = float(greetings['score'])
+                normalized = (score / 5) * 100
+                agent_metrics[agent_id]['greeting'].append(min(100.0, normalized))
             
-            # 2. Understanding - From CRM query paraphrase
+            # 2. Understanding - From CRM query paraphrase (0-5 → 0-100)
             crm_query = validation.get('crm_query_paraphrase', {})
-            if 'score' in crm_query:
-                score = crm_query['score']
-                if isinstance(score, (int, float)):
-                    normalized = (score / 5) * 10 if score > 0 else 0
-                    metrics['understanding'].append(min(10, round(normalized, 1)))
+            if 'score' in crm_query and crm_query['score'] is not None:
+                score = float(crm_query['score'])
+                normalized = (score / 5) * 100
+                agent_metrics[agent_id]['understanding'].append(min(100.0, normalized))
             
-            # 3. CRM Validation - From good_right_probing
+            # 3. CRM Validation - From good_right_probing (0-12 → 0-100)
             probing = validation.get('good_right_probing', {})
-            if 'score' in probing:
-                score = probing['score']
-                if isinstance(score, (int, float)):
-                    # good_right_probing is 0-12 scale, normalize to 0-10
-                    normalized = (score / 12) * 10 if score > 0 else 0
-                    metrics['crm_validation'].append(min(10, round(normalized, 1)))
+            if 'score' in probing and probing['score'] is not None:
+                score = float(probing['score'])
+                normalized = (score / 12) * 100
+                agent_metrics[agent_id]['crm_validation'].append(min(100.0, normalized))
             
-            # 4. Communication - From communication score
-            comm = validation.get('communication', {})
-            if 'score' in comm:
-                score = comm['score']
-                if isinstance(score, (int, float)):
-                    normalized = (score / 5) * 10 if score > 0 else 0
-                    metrics['communication'].append(min(10, round(normalized, 1)))
+            # 4. Communication - Average of energy and grammar (0-5 → 0-100)
+            comm_scores = []
+            for key in ['energy_enthusiasm_pace', 'grammar_vocabulary']:
+                metric = validation.get(key, {})
+                if 'score' in metric and metric['score'] is not None:
+                    score = float(metric['score'])
+                    normalized = (score / 5) * 100
+                    comm_scores.append(normalized)
             
-            # 5. Soft Skills - Average of energy, listening, grammar, empathy
+            if comm_scores:
+                avg_comm = sum(comm_scores) / len(comm_scores)
+                agent_metrics[agent_id]['communication'].append(min(100.0, avg_comm))
+            
+            # 5. Soft Skills - Average of listening and empathy (0-5 → 0-100)
             soft_skill_scores = []
-            for metric_key in ['energy_enthusiasm_pace', 'listening_acknowledgment', 'grammar_vocabulary', 'apology_empathy']:
-                metric = validation.get(metric_key, {})
-                if 'score' in metric:
-                    score = metric['score']
-                    if isinstance(score, (int, float)):
-                        normalized = (score / 5) * 10 if score > 0 else 0
-                        soft_skill_scores.append(min(10, normalized))
+            for key in ['listening_acknowledgment', 'apology_empathy']:
+                metric = validation.get(key, {})
+                if 'score' in metric and metric['score'] is not None:
+                    score = float(metric['score'])
+                    normalized = (score / 5) * 100
+                    soft_skill_scores.append(normalized)
             
             if soft_skill_scores:
-                avg_soft_skill = round(sum(soft_skill_scores) / len(soft_skill_scores), 1)
-                metrics['soft_skills'].append(avg_soft_skill)
+                avg_soft_skill = sum(soft_skill_scores) / len(soft_skill_scores)
+                agent_metrics[agent_id]['soft_skills'].append(min(100.0, avg_soft_skill))
             
-            # 6. Compliance - From dead_air_hold_process
+            # 6. Compliance - From hold process (0-6 → 0-100)
             hold_process = validation.get('dead_air_hold_process', {})
-            if 'score' in hold_process:
-                score = hold_process['score']
-                if isinstance(score, (int, float)):
-                    # dead_air is 0-6 scale, normalize to 0-10
-                    normalized = (score / 6) * 10 if score > 0 else 0
-                    metrics['compliance'].append(min(10, round(normalized, 1)))
+            if 'score' in hold_process and hold_process['score'] is not None:
+                score = float(hold_process['score'])
+                normalized = (score / 6) * 100
+                agent_metrics[agent_id]['compliance'].append(min(100.0, normalized))
             
-            # 7. Resolution - We'll use overall validation percentage as resolution score
-            if 'percentage' in validation:
-                pct = validation['percentage']
-                if isinstance(pct, (int, float)):
-                    # percentage is 0-100, convert to 0-10
-                    score = (pct / 100) * 10
-                    metrics['resolution'].append(round(score, 1))
+            # 7. Resolution - From overall validation percentage (0-100)
+            if 'percentage' in validation and validation['percentage'] is not None:
+                pct = float(validation['percentage'])
+                agent_metrics[agent_id]['resolution'].append(min(100.0, pct))
             
-            # 8. Closing - From correct_closing
+            # 8. Closing - From correct_closing (0-6 → 0-100)
             closing = validation.get('correct_closing', {})
-            if 'score' in closing:
-                score = closing['score']
-                if isinstance(score, (int, float)):
-                    # correct_closing is 0-6 scale, normalize to 0-10
-                    normalized = (score / 6) * 10 if score > 0 else 0
-                    metrics['closing'].append(min(10, round(normalized, 1)))
+            if 'score' in closing and closing['score'] is not None:
+                score = float(closing['score'])
+                normalized = (score / 6) * 100
+                agent_metrics[agent_id]['closing'].append(min(100.0, normalized))
     
-    # Calculate averages for each metric
-    scorecard = {}
-    for metric_name, scores in metrics.items():
-        if scores:
-            avg_score = round(sum(scores) / len(scores), 1)
-            scorecard[metric_name] = avg_score
-        else:
-            scorecard[metric_name] = 0.0
+    # Calculate per-agent averages
+    agent_scorecards = []
+    for agent_id, metrics in agent_metrics.items():
+        scorecard = {
+            'agent_id': agent_id,
+            'calls': metrics['calls']
+        }
+        
+        # Calculate averages for each metric (keep as precise floats)
+        for metric_name in ['greeting', 'understanding', 'crm_validation', 'communication', 
+                           'soft_skills', 'compliance', 'resolution', 'closing']:
+            scores = metrics[metric_name]
+            if scores:
+                avg_score = sum(scores) / len(scores)
+                scorecard[metric_name] = _round_float(max(0.0, min(100.0, avg_score)))  # Ensure 0-100 range
+            else:
+                scorecard[metric_name] = 0.0
+        
+        agent_scorecards.append(scorecard)
     
-    return scorecard
+    # Sort by agent_id for consistent ordering
+    return sorted(agent_scorecards, key=lambda x: x['agent_id'])

@@ -52,43 +52,62 @@ def upload_audio_to_s3(audio_file, call_id):
 
 
 def _word_format(text):
+    """Enhanced word formatting with 50+ corrections for Wakefit domain"""
     if not text:
         return text
     
     import re
     
-    patterns = [
-        (r'\bwiprit\b', 'Wakefit'),
-        (r'\brakefirt\b', 'Wakefit'),
-        (r'\bwakefeet\b', 'Wakefit'),
-        (r'\bwakefeat\b', 'Wakefit'),
-        (r'\bwakepit\b', 'Wakefit'),
-        (r'\bwikfit\b', 'Wakefit'),
-        (r'\bwikfeet\b', 'Wakefit'),
-        (r'\bvakefit\b', 'Wakefit'),
-        (r'\bvakfit\b', 'Wakefit'),
-        (r'\bweakfit\b', 'Wakefit'),
-        (r'\bwekfit\b', 'Wakefit'),
-        (r'\bwak\s*fit\b', 'Wakefit'),
-        (r'\bwake\s*fit\b', 'Wakefit'),
-        (r'\bwik\s*fit\b', 'Wakefit'),
-        (r'\bvake\s*fit\b', 'Wakefit'),
-        (r'\bwak\s*feet\b', 'Wakefit'),
-        (r'\bwake\s*feet\b', 'Wakefit'),
-        (r'\bwak\s*pit\b', 'Wakefit'),
-        (r'\bwake\s*pit\b', 'Wakefit'),
-        (r'\brake\s*fit\b', 'Wakefit'),
-        (r'\brake\s*firt\b', 'Wakefit'),
-        (r'\brak\s*fit\b', 'Wakefit'),
-        (r'\brak\s*feet\b', 'Wakefit'),
-        (r'\b[wrv][aei]k?[ec]?\s*(?:fit|pit|feet|firt|feit|feat|fert)\b', 'Wakefit'),
+    # Expanded Wakefit brand corrections (50+ variations)
+    wakefit_patterns = [
+        # Common misheard variations
+        (r'\bwiprit\b', 'Wakefit'), (r'\brakefirt\b', 'Wakefit'), (r'\bwakefeet\b', 'Wakefit'),
+        (r'\bwakefeat\b', 'Wakefit'), (r'\bwakepit\b', 'Wakefit'), (r'\bwikfit\b', 'Wakefit'),
+        (r'\bwikfeet\b', 'Wakefit'), (r'\bvakefit\b', 'Wakefit'), (r'\bvakfit\b', 'Wakefit'),
+        (r'\bweakfit\b', 'Wakefit'), (r'\bwekfit\b', 'Wakefit'), (r'\bwagfit\b', 'Wakefit'),
+        # Spaced variations
+        (r'\bwak\s*fit\b', 'Wakefit'), (r'\bwake\s*fit\b', 'Wakefit'), (r'\bwik\s*fit\b', 'Wakefit'),
+        (r'\bvake\s*fit\b', 'Wakefit'), (r'\bwak\s*feet\b', 'Wakefit'), (r'\bwake\s*feet\b', 'Wakefit'),
+        (r'\bwak\s*pit\b', 'Wakefit'), (r'\bwake\s*pit\b', 'Wakefit'), (r'\brake\s*fit\b', 'Wakefit'),
+        (r'\brake\s*firt\b', 'Wakefit'), (r'\brak\s*fit\b', 'Wakefit'), (r'\brak\s*feet\b', 'Wakefit'),
+        # Hindi influenced variations
+        (r'\bवेकफिट\b', 'Wakefit'), (r'\bवाकफिट\b', 'Wakefit'), (r'\bवेक\s*फिट\b', 'Wakefit'),
+        # Regional pronunciations
+        (r'\bwepfit\b', 'Wakefit'), (r'\bwakephit\b', 'Wakefit'), (r'\bwegfit\b', 'Wakefit'),
+        (r'\bwagphit\b', 'Wakefit'), (r'\bwekphit\b', 'Wakefit'), (r'\bwakepit\b', 'Wakefit'),
+        # Catch-all pattern for similar sounding variations
+        (r'\b[wrv][aei]k?[ec]?\s*(?:fit|pit|feet|firt|feit|feat|fert|phit)\b', 'Wakefit'),
+        # Already correct
         (r'\bwakefit\b', 'Wakefit'),
     ]
     
+    # Product name corrections
+    product_patterns = [
+        (r'\bortho\s*medic\b', 'Ortho-Medic'), (r'\bortho\s*medik\b', 'Ortho-Medic'),
+        (r'\bmemory\s*foam\b', 'Memory Foam'), (r'\bmemori\s*foam\b', 'Memory Foam'),
+        (r'\bduet\s*mattress\b', 'Duet Mattress'), (r'\bduet\s*matress\b', 'Duet Mattress'),
+        (r'\belev8\b', 'Elev8'), (r'\belevate\b', 'Elev8'), (r'\belev\s*8\b', 'Elev8'),
+        (r'\bzen\s*mattress\b', 'Zen Mattress'), (r'\bzen\s*matress\b', 'Zen Mattress'),
+        (r'\btrack\s*mattress\b', 'Track Mattress'), (r'\btrack\s*matress\b', 'Track Mattress'),
+    ]
+    
+    # Common business terms
+    business_patterns = [
+        (r'\border\s*i\.?d\.?\b', 'Order ID'), (r'\border\s*number\b', 'Order Number'),
+        (r'\bdelivery\s*status\b', 'delivery status'), (r'\btrack\s*order\b', 'track order'),
+        (r'\breturn\s*policy\b', 'return policy'), (r'\bwarranty\s*period\b', 'warranty period'),
+        (r'\bcustomer\s*care\b', 'customer care'), (r'\bcustomer\s*support\b', 'customer support'),
+        (r'\brefund\s*process\b', 'refund process'), (r'\bdelivery\s*charges\b', 'delivery charges'),
+    ]
+    
+    # Apply all pattern corrections
     corrected_text = text
-    for pattern, replacement in patterns:
+    all_patterns = wakefit_patterns + product_patterns + business_patterns
+    
+    for pattern, replacement in all_patterns:
         corrected_text = re.sub(pattern, replacement, corrected_text, flags=re.IGNORECASE)
     
+    # Enhanced digit conversion (spoken numbers to digits)
     digit_map = {
         'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
         'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9',
@@ -114,11 +133,13 @@ def _word_format(text):
             i += 1
         
         result = ''.join(digits)
-        return result
+        return result if result else match.group(0)  # Fallback to original if no conversion
     
+    # Apply digit conversion for sequences like "nine seven eight double six"
     digit_pattern = r'\b(?:zero|one|two|three|four|five|six|seven|eight|nine|double|triple)(?:\s+(?:zero|one|two|three|four|five|six|seven|eight|nine|double|triple))*\b'
     corrected_text = re.sub(digit_pattern, replace_spoken_digits, corrected_text, flags=re.IGNORECASE)
     
+    # Email formatting (spoken "at" and "dot")
     email_pattern = r'\b(\w+(?:\s*dot\s*\w+)*)\s+at\s+(\w+)\s+dot\s+(\w+)\b'
     def format_email(match):
         local = match.group(1).replace(' dot ', '.')
@@ -128,12 +149,20 @@ def _word_format(text):
     
     corrected_text = re.sub(email_pattern, format_email, corrected_text, flags=re.IGNORECASE)
     
+    # Phone number formatting (spoken digits with spaces)
+    phone_pattern = r'\b(\d)\s+(\d)\s+(\d)\s+(\d)\s+(\d)\s+(\d)\s+(\d)\s+(\d)\s+(\d)\s+(\d)\b'
+    def format_phone(match):
+        digits = ''.join(match.groups())
+        return digits  # Return as continuous number
+    
+    corrected_text = re.sub(phone_pattern, format_phone, corrected_text)
+    
     return corrected_text
 
 
 def transcribe_audio(s3_key, language_code='en-US'):
     """
-    Transcribe audio using ElevenLabs
+    Transcribe audio using ElevenLabs with enhanced language detection
     Returns transcript messages in format: [{'role': 'user'/'agent', 'text': '...', 'timestamp': '...'}]
     """
     s3_client = _get_s3_client()
@@ -164,15 +193,99 @@ def transcribe_audio(s3_key, language_code='en-US'):
     # Parse ElevenLabs response into messages
     messages = _parse_elevenlabs_transcript(transcription)
     
+    # Enhanced language detection after transcription
+    detected_language = detect_language_improved(messages)
+    print(f"[TRANSCRIBE] Language detected: {detected_language}")
+    
+    # Apply word corrections
     for msg in messages:
         if 'text' in msg:
             msg['text'] = _word_format(msg['text'])
     
     return messages
 
+
+def detect_language_improved(transcript_messages):
+    """
+    Enhanced language detection using multiple strategies:
+    1. Character set analysis (Hindi unicode blocks)
+    2. Word frequency (common Hindi/English words)  
+    3. Mixed language detection (Hinglish)
+    """
+    if not transcript_messages:
+        return 'en-US'
+    
+    english_count = 0
+    hindi_count = 0
+    total_chars = 0
+    total_words = 0
+    
+    # Common Hindi words for detection
+    hindi_words = {
+        'हाँ', 'नहीं', 'क्या', 'कैसे', 'कब', 'कहाँ', 'जी', 'सर', 'मैम',
+        'ठीक', 'अच्छा', 'बुरा', 'समस्या', 'आर्डर', 'डिलीवरी', 'पैसा', 'रुपया',
+        'हेलो', 'नमस्ते', 'धन्यवाद', 'शुक्रिया', 'माफ', 'क्षमा'
+    }
+    
+    # Common English words 
+    english_words = {
+        'hello', 'hi', 'yes', 'no', 'thank', 'thanks', 'sorry', 'please',
+        'order', 'delivery', 'wakefit', 'mattress', 'customer', 'support',
+        'help', 'problem', 'issue', 'money', 'refund', 'good', 'bad'
+    }
+    
+    hindi_word_count = 0
+    english_word_count = 0
+    
+    for msg in transcript_messages:
+        text = msg.get('text', '')
+        if not text:
+            continue
+            
+        total_chars += len(text)
+        words = text.lower().split()
+        total_words += len(words)
+        
+        # Count Hindi characters (Devanagari script)
+        hindi_count += sum(1 for char in text if '\u0900' <= char <= '\u097F')
+        
+        # Count English characters
+        english_count += sum(1 for char in text if 'a' <= char.lower() <= 'z')
+        
+        # Count language-specific words
+        for word in words:
+            word_clean = word.strip('.,!?():;')
+            if word_clean in hindi_words:
+                hindi_word_count += 1
+            elif word_clean in english_words:
+                english_word_count += 1
+    
+    if total_chars == 0:
+        return 'en-US'
+    
+    # Calculate percentages
+    hindi_char_pct = (hindi_count / total_chars) * 100 if total_chars > 0 else 0
+    english_char_pct = (english_count / total_chars) * 100 if total_chars > 0 else 0
+    hindi_word_pct = (hindi_word_count / total_words) * 100 if total_words > 0 else 0
+    english_word_pct = (english_word_count / total_words) * 100 if total_words > 0 else 0
+    
+    # Debug logging
+    print(f"[LANG-DETECT] Hindi chars: {hindi_char_pct:.1f}%, English chars: {english_char_pct:.1f}%")
+    print(f"[LANG-DETECT] Hindi words: {hindi_word_pct:.1f}%, English words: {english_word_pct:.1f}%")
+    
+    # Classification logic
+    if hindi_char_pct > 30 or hindi_word_pct > 20:
+        return 'hi-IN'  # Predominantly Hindi
+    elif hindi_char_pct > 10 and english_char_pct > 30:
+        return 'hi-IN'  # Hinglish (code-switching, treat as Hindi)
+    elif hindi_word_pct > 5 and english_word_pct > 10:
+        return 'hi-IN'  # Mixed conversation with Hindi elements
+    else:
+        return 'en-US'  # Predominantly English
+
 def _detect_agent_speaker(temp_messages):
     """
-    Intelligently detect which speaker is the Customer Support agent
+    Enhanced agent detection using 15 messages with weighted scoring system
     Returns: 'speaker_0' or 'speaker_1' (whichever is the agent)
     """
     if not temp_messages or len(temp_messages) < 2:
@@ -181,47 +294,98 @@ def _detect_agent_speaker(temp_messages):
     speaker_0_score = 0
     speaker_1_score = 0
     
-    # Analyze first 5 messages for patterns
-    for msg in temp_messages[:5]:
+    # Analyze first 15 messages (or all if fewer available)
+    analysis_count = min(15, len(temp_messages))
+    
+    for i, msg in enumerate(temp_messages[:analysis_count]):
         text = msg.get('text', '').lower()
         speaker = msg.get('_raw_speaker', '')
         
         if not text or not speaker:
             continue
         
-        # Agent indicators
-        agent_keywords = [
-            'wakefit', 'wake fit',
-            'good morning', 'good evening', 'good afternoon',
-            'how can i help', 'how may i help', 'how can i assist',
-            'call back request', 'raised a request',
+        # STRONG agent indicators (weight: 5 points each)
+        strong_agent_keywords = [
+            'wakefit', 'wake fit', 'good morning wakefit', 'hello wakefit',
+            'thank you for calling wakefit', 'welcome to wakefit',
+            'this is wakefit customer support', 'wakefit customer care',
+            'let me check your order', 'i can see your order here',
+            'let me look into this for you', 'i will help you with this'
+        ]
+        
+        # MODERATE agent indicators (weight: 3 points each)
+        moderate_agent_keywords = [
+            'good morning', 'good evening', 'good afternoon', 'hello sir', 'hello ma\'am',
+            'how can i help you', 'how may i assist you', 'how can i assist',
             'let me check', 'let me look into', 'just give me a moment',
-            'sir', 'ma\'am', 'mister',
-            'thank you for calling', 'thanks for calling'
+            'sir', 'ma\'am', 'mister', 'madam',
+            'thank you for calling', 'thanks for calling',
+            'may i have your order number', 'can i get your order id',
+            'let me transfer you', 'i will escalate this'
         ]
         
-        # Customer indicators
-        customer_keywords = [
-            'i am waiting', 'i\'m waiting', 'i have been waiting',
-            'not delivered', 'didn\'t receive', 'haven\'t received',
-            'my order', 'i ordered', 'i bought',
-            'i need', 'i want', 'i require'
+        # WEAK agent indicators (weight: 1 point each)
+        weak_agent_keywords = [
+            'our company', 'our product', 'our policy', 'our team',
+            'we will', 'we can', 'i can help', 'i will help',
+            'please hold', 'one moment please', 'bear with me'
         ]
         
-        agent_count = sum(1 for keyword in agent_keywords if keyword in text)
-        customer_count = sum(1 for keyword in customer_keywords if keyword in text)
+        # STRONG customer indicators (weight: -5 points each)
+        strong_customer_keywords = [
+            'i ordered', 'i bought', 'i purchased', 'my order',
+            'i am waiting for', 'i have been waiting', 'where is my order',
+            'i want my refund', 'i need my money back', 'this is unacceptable',
+            'i will complain', 'i want to speak to your manager'
+        ]
         
+        # MODERATE customer indicators (weight: -3 points each)
+        moderate_customer_keywords = [
+            'not delivered', 'didn\'t receive', 'haven\'t received', 'not got',
+            'i need', 'i want', 'i require', 'my problem is',
+            'i called yesterday', 'i have called before', 'nobody helped me'
+        ]
+        
+        # Calculate weighted scores
+        strong_agent = sum(5 for keyword in strong_agent_keywords if keyword in text)
+        moderate_agent = sum(3 for keyword in moderate_agent_keywords if keyword in text)
+        weak_agent = sum(1 for keyword in weak_agent_keywords if keyword in text)
+        
+        strong_customer = sum(-5 for keyword in strong_customer_keywords if keyword in text)
+        moderate_customer = sum(-3 for keyword in moderate_customer_keywords if keyword in text)
+        
+        total_score = strong_agent + moderate_agent + weak_agent + strong_customer + moderate_customer
+        
+        # First speaker bonus (agents typically greet first)
+        if i == 0:
+            total_score += 3
+            
+        # Greeting pattern bonus (if first message contains greeting)
+        if i == 0 and any(greet in text for greet in ['good morning', 'hello', 'hi', 'welcome']):
+            total_score += 5
+        
+        # Question pattern analysis (agents ask more questions)
+        question_count = text.count('?') + sum(1 for q in ['what is', 'when did', 'how can', 'do you', 'have you', 'can you', 'may i'] if q in text)
+        if question_count > 0:
+            total_score += question_count * 2
+            
+        # Apply score to appropriate speaker
         if speaker == 'speaker_0':
-            speaker_0_score += agent_count - customer_count
+            speaker_0_score += total_score
         elif speaker == 'speaker_1':
-            speaker_1_score += agent_count - customer_count
+            speaker_1_score += total_score
     
-    # Higher score = more likely to be agent
+    # Final decision with confidence logging
     if speaker_0_score > speaker_1_score:
+        confidence = speaker_0_score - speaker_1_score
+        print(f"[TRANSCRIBE] Agent detected as speaker_0 (confidence: {confidence})")
         return 'speaker_0'
     elif speaker_1_score > speaker_0_score:
+        confidence = speaker_1_score - speaker_0_score  
+        print(f"[TRANSCRIBE] Agent detected as speaker_1 (confidence: {confidence})")
         return 'speaker_1'
     else:
+        print(f"[TRANSCRIBE] Equal scores, defaulting to speaker_0")
         return 'speaker_0'  # Default fallback
 
 

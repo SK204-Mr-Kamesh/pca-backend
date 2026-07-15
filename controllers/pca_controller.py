@@ -13,7 +13,7 @@ from werkzeug.utils import secure_filename
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services import pca_service
-from transcribe_service import upload_audio_to_s3, transcribe_audio, save_transcript_to_s3
+from transcribe_service import upload_audio_to_s3, transcribe_audio, save_transcript_to_s3, detect_language_improved
 import pca_clickhouse as ch
 from controllers.controller_utils import success_response, error_response
 
@@ -73,11 +73,14 @@ def process_upload_async(file_data, call_id, caller_name, notes, original_filena
         update_progress(call_id, 'transcribe_audio', 'processing',
                        f"Transcribing audio")
         
-        # Use English as default, transcription will detect Hindi if present
+        # Use English as default, transcription will detect actual language
         transcript_messages = transcribe_audio(recording_s3_key, 'en-US')
         
+        # Detect actual language from transcript
+        detected_language = detect_language_improved(transcript_messages)
+        
         update_progress(call_id, 'transcribe_audio', 'completed',
-                       f"Transcription completed")
+                       f"Transcription completed (Language: {detected_language})")
         
         # Save transcript to S3
         update_progress(call_id, 'save_transcript', 'processing',
@@ -102,12 +105,8 @@ def process_upload_async(file_data, call_id, caller_name, notes, original_filena
         update_progress(call_id, 'analyze_call', 'processing',
                        f"Analyzing call")
         
-        # Detect language from transcript
-        detected_language = 'en-US'  # Default
-        # Simple detection: if transcript has Hindi unicode, mark as hi-IN
-        transcript_text = ' '.join([msg.get('text', '') for msg in transcript_messages])
-        if any('\u0900' <= char <= '\u097F' for char in transcript_text):
-            detected_language = 'hi-IN'
+        # Detect language from transcript (use improved detection)
+        detected_language = detect_language_improved(transcript_messages)
         
         payload = {
             'call_id': call_id,
