@@ -643,7 +643,7 @@ def get_call_details(call_id):
             dt = dt.replace(tzinfo=timezone.utc)
         ist_offset = timedelta(hours=5, minutes=30)
         ist_dt = dt.astimezone(timezone.utc) + ist_offset
-        return ist_dt.strftime("%d/%m/%Y, %H:%M:%S")
+        return ist_dt.isoformat()
     
     # Convert audio size to MB
     audio_size_mb = None
