@@ -285,108 +285,84 @@ def detect_language_improved(transcript_messages):
 
 def _detect_agent_speaker(temp_messages):
     """
-    Enhanced agent detection using 15 messages with weighted scoring system
+    Detect agent speaker by analyzing message patterns across ALL messages.
+    
+    Agent messages typically start with:
+    - Greetings (Hello, Good morning, Welcome)
+    - Company mention (Wakefit)
+    - Professional phrases (How can I help, Let me check, May I have)
+    
+    Customer messages typically start with:
+    - Answers/affirmations (Yes, No, Yeah, That's correct)
+    - Problem statements (I ordered, I'm waiting, Not delivered)
+    - Complaints (Delayed, Frustrated, Unacceptable)
+    
     Returns: 'speaker_0' or 'speaker_1' (whichever is the agent)
     """
     if not temp_messages or len(temp_messages) < 2:
-        return 'speaker_0'  # Default fallback
+        return 'speaker_0'
     
-    speaker_0_score = 0
-    speaker_1_score = 0
+    speaker_profiles = {}
     
-    # Analyze first 15 messages (or all if fewer available)
-    analysis_count = min(15, len(temp_messages))
-    
-    for i, msg in enumerate(temp_messages[:analysis_count]):
-        text = msg.get('text', '').lower()
+    # Analyze ALL messages to determine speaker roles
+    for msg in temp_messages:
         speaker = msg.get('_raw_speaker', '')
+        text = msg.get('text', '').lower().strip()
         
-        if not text or not speaker:
+        if not speaker or not text:
             continue
         
-        # STRONG agent indicators (weight: 5 points each)
-        strong_agent_keywords = [
-            'wakefit', 'wake fit', 'good morning wakefit', 'hello wakefit',
-            'thank you for calling wakefit', 'welcome to wakefit',
-            'this is wakefit customer support', 'wakefit customer care',
-            'let me check your order', 'i can see your order here',
-            'let me look into this for you', 'i will help you with this'
+        if speaker not in speaker_profiles:
+            speaker_profiles[speaker] = {'agent_score': 0, 'customer_score': 0}
+        
+        # AGENT message patterns (starts with professional/greeting)
+        agent_patterns = [
+            'hello', 'good morning', 'good evening', 'good afternoon',
+            'welcome', 'thank you for calling', 'how can i help',
+            'how may i', 'can i', 'may i have', 'let me check', 
+            'let me look', 'i can see', 'wakefit', 'customer support'
         ]
         
-        # MODERATE agent indicators (weight: 3 points each)
-        moderate_agent_keywords = [
-            'good morning', 'good evening', 'good afternoon', 'hello sir', 'hello ma\'am',
-            'how can i help you', 'how may i assist you', 'how can i assist',
-            'let me check', 'let me look into', 'just give me a moment',
-            'sir', 'ma\'am', 'mister', 'madam',
-            'thank you for calling', 'thanks for calling',
-            'may i have your order number', 'can i get your order id',
-            'let me transfer you', 'i will escalate this'
+        # CUSTOMER message patterns (starts with personal/problems)
+        customer_patterns = [
+            'yes', 'yeah', 'no', 'correct', 'that\'s right', 'right',
+            'i ordered', 'i bought', 'i called', 'i\'m waiting',
+            'it hasn\'t', 'not delivered', 'not received', 'didn\'t receive',
+            'my order', 'my problem', 'i need', 'delayed',
+            'problem', 'issue', 'complaint', 'frustrated', 'unacceptable'
         ]
         
-        # WEAK agent indicators (weight: 1 point each)
-        weak_agent_keywords = [
-            'our company', 'our product', 'our policy', 'our team',
-            'we will', 'we can', 'i can help', 'i will help',
-            'please hold', 'one moment please', 'bear with me'
-        ]
+        # Score based on message opening
+        for agent_pattern in agent_patterns:
+            if text.startswith(agent_pattern):
+                speaker_profiles[speaker]['agent_score'] += 5
+                break
         
-        # STRONG customer indicators (weight: -5 points each)
-        strong_customer_keywords = [
-            'i ordered', 'i bought', 'i purchased', 'my order',
-            'i am waiting for', 'i have been waiting', 'where is my order',
-            'i want my refund', 'i need my money back', 'this is unacceptable',
-            'i will complain', 'i want to speak to your manager'
-        ]
+        for customer_pattern in customer_patterns:
+            if text.startswith(customer_pattern):
+                speaker_profiles[speaker]['customer_score'] += 5
+                break
         
-        # MODERATE customer indicators (weight: -3 points each)
-        moderate_customer_keywords = [
-            'not delivered', 'didn\'t receive', 'haven\'t received', 'not got',
-            'i need', 'i want', 'i require', 'my problem is',
-            'i called yesterday', 'i have called before', 'nobody helped me'
-        ]
+        # Questions = agent tendency
+        speaker_profiles[speaker]['agent_score'] += text.count('?') * 3
         
-        # Calculate weighted scores
-        strong_agent = sum(5 for keyword in strong_agent_keywords if keyword in text)
-        moderate_agent = sum(3 for keyword in moderate_agent_keywords if keyword in text)
-        weak_agent = sum(1 for keyword in weak_agent_keywords if keyword in text)
-        
-        strong_customer = sum(-5 for keyword in strong_customer_keywords if keyword in text)
-        moderate_customer = sum(-3 for keyword in moderate_customer_keywords if keyword in text)
-        
-        total_score = strong_agent + moderate_agent + weak_agent + strong_customer + moderate_customer
-        
-        # First speaker bonus (agents typically greet first)
-        if i == 0:
-            total_score += 3
-            
-        # Greeting pattern bonus (if first message contains greeting)
-        if i == 0 and any(greet in text for greet in ['good morning', 'hello', 'hi', 'welcome']):
-            total_score += 5
-        
-        # Question pattern analysis (agents ask more questions)
-        question_count = text.count('?') + sum(1 for q in ['what is', 'when did', 'how can', 'do you', 'have you', 'can you', 'may i'] if q in text)
-        if question_count > 0:
-            total_score += question_count * 2
-            
-        # Apply score to appropriate speaker
-        if speaker == 'speaker_0':
-            speaker_0_score += total_score
-        elif speaker == 'speaker_1':
-            speaker_1_score += total_score
+        # Complaints = customer tendency  
+        complaint_keywords = ['delayed', 'not delivered', 'problem', 'issue', 'frustrated', 'angry']
+        for keyword in complaint_keywords:
+            if keyword in text:
+                speaker_profiles[speaker]['customer_score'] += 2
     
-    # Final decision with confidence logging
-    if speaker_0_score > speaker_1_score:
-        confidence = speaker_0_score - speaker_1_score
-        print(f"[TRANSCRIBE] Agent detected as speaker_0 (confidence: {confidence})")
-        return 'speaker_0'
-    elif speaker_1_score > speaker_0_score:
-        confidence = speaker_1_score - speaker_0_score  
-        print(f"[TRANSCRIBE] Agent detected as speaker_1 (confidence: {confidence})")
-        return 'speaker_1'
-    else:
-        print(f"[TRANSCRIBE] Equal scores, defaulting to speaker_0")
-        return 'speaker_0'  # Default fallback
+    # Find speaker with highest agent score
+    agent_speaker = 'speaker_0'
+    highest_score = -999
+    
+    for speaker, scores in speaker_profiles.items():
+        net_score = scores['agent_score'] - scores['customer_score']
+        if net_score > highest_score:
+            highest_score = net_score
+            agent_speaker = speaker
+    
+    return agent_speaker
 
 
 def _parse_elevenlabs_transcript(transcription):
