@@ -32,6 +32,62 @@ def _get_elevenlabs_client():
     )
 
 
+def _detect_speakers_with_llm(raw_transcript):
+    """Use LLM to detect which speaker is customer and which is customer support"""
+    speaker_detection_prompt = """You are an expert at analyzing call transcripts.
+
+Given a raw transcript with speaker labels (speaker_0, speaker_1, etc.), identify which speaker is the customer and which is the customer support representative.
+
+Look for:
+- Professional greetings ("thank you for calling", "how can I help")
+- Company name mentions ("Wakefit", "calling from Wakefit")
+- Agent self-identification ("this is [name] from [company]", "my name is")
+- Support desk language ("let me check", "I can see", "order number")
+- Customer-like behavior (problem description, asking for help)
+
+Return a JSON object with:
+{
+  "customer_speaker": "speaker_0" or "speaker_1" (whoever is the customer calling for help),
+  "support_speaker": "speaker_0" or "speaker_1" (whoever is the Wakefit agent),
+  "confidence": "high" or "medium" or "low",
+  "reasoning": "<brief explanation>"
+}"""
+    
+    try:
+        bedrock_client = boto3.client(
+            "bedrock-runtime",
+            aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+            region_name=os.environ.get("AWS_REGION", "ap-south-1"),
+        )
+        
+        model_id = os.environ.get("PCA_MODEL_ID", "global.anthropic.claude-haiku-4-5-20251001-v1:0")
+        
+        resp = bedrock_client.converse(
+            modelId=model_id,
+            system=[{"text": speaker_detection_prompt}],
+            messages=[{"role": "user", "content": [{"text": f"Transcript:\n\n{raw_transcript}"}]}],
+            inferenceConfig={"maxTokens": 500},
+        )
+        text = resp["output"]["message"]["content"][0]["text"].strip()
+        
+        # Parse JSON response
+        import json as json_module
+        try:
+            return json_module.loads(text)
+        except:
+            # Try to extract JSON from text
+            start = text.find('{')
+            end = text.rfind('}') + 1
+            if start >= 0 and end > start:
+                return json_module.loads(text[start:end])
+            return None
+    except Exception as e:
+        print(f"[TRANSCRIBE] Speaker detection failed: {e}")
+        return None
+
+
+
 def upload_audio_to_s3(audio_file, call_id):
     """Upload audio file to S3 and return S3 key"""
     s3_client = _get_s3_client()
@@ -285,84 +341,36 @@ def detect_language_improved(transcript_messages):
 
 def _detect_agent_speaker(temp_messages):
     """
-    Detect agent speaker by analyzing message patterns across ALL messages.
+    Detect agent speaker using LLM analysis of transcript.
     
-    Agent messages typically start with:
-    - Greetings (Hello, Good morning, Welcome)
-    - Company mention (Wakefit)
-    - Professional phrases (How can I help, Let me check, May I have)
+    The LLM examines the conversation to identify who is the customer and who is customer support.
+    This is more accurate than pattern matching as it understands context.
     
-    Customer messages typically start with:
-    - Answers/affirmations (Yes, No, Yeah, That's correct)
-    - Problem statements (I ordered, I'm waiting, Not delivered)
-    - Complaints (Delayed, Frustrated, Unacceptable)
-    
-    Returns: 'speaker_0' or 'speaker_1' (whichever is the agent)
+    Returns: speaker ID (string) of the agent
     """
-    if not temp_messages or len(temp_messages) < 2:
+    if not temp_messages:
         return 'speaker_0'
     
-    speaker_profiles = {}
+    if len(temp_messages) < 2:
+        # Single speaker case - can't determine, assume speaker_0 is agent
+        return temp_messages[0].get('_raw_speaker', 'speaker_0')
     
-    # Analyze ALL messages to determine speaker roles
+    # Build raw transcript format for LLM
+    raw_transcript = ""
     for msg in temp_messages:
-        speaker = msg.get('_raw_speaker', '')
-        text = msg.get('text', '').lower().strip()
-        
-        if not speaker or not text:
-            continue
-        
-        if speaker not in speaker_profiles:
-            speaker_profiles[speaker] = {'agent_score': 0, 'customer_score': 0}
-        
-        # AGENT message patterns (starts with professional/greeting)
-        agent_patterns = [
-            'hello', 'good morning', 'good evening', 'good afternoon',
-            'welcome', 'thank you for calling', 'how can i help',
-            'how may i', 'can i', 'may i have', 'let me check', 
-            'let me look', 'i can see', 'wakefit', 'customer support'
-        ]
-        
-        # CUSTOMER message patterns (starts with personal/problems)
-        customer_patterns = [
-            'yes', 'yeah', 'no', 'correct', 'that\'s right', 'right',
-            'i ordered', 'i bought', 'i called', 'i\'m waiting',
-            'it hasn\'t', 'not delivered', 'not received', 'didn\'t receive',
-            'my order', 'my problem', 'i need', 'delayed',
-            'problem', 'issue', 'complaint', 'frustrated', 'unacceptable'
-        ]
-        
-        # Score based on message opening
-        for agent_pattern in agent_patterns:
-            if text.startswith(agent_pattern):
-                speaker_profiles[speaker]['agent_score'] += 5
-                break
-        
-        for customer_pattern in customer_patterns:
-            if text.startswith(customer_pattern):
-                speaker_profiles[speaker]['customer_score'] += 5
-                break
-        
-        # Questions = agent tendency
-        speaker_profiles[speaker]['agent_score'] += text.count('?') * 3
-        
-        # Complaints = customer tendency  
-        complaint_keywords = ['delayed', 'not delivered', 'problem', 'issue', 'frustrated', 'angry']
-        for keyword in complaint_keywords:
-            if keyword in text:
-                speaker_profiles[speaker]['customer_score'] += 2
+        speaker = msg.get('_raw_speaker', 'unknown')
+        text = msg.get('text', '')
+        raw_transcript += f"{speaker}: {text}\n"
     
-    # Find speaker with highest agent score
-    agent_speaker = 'speaker_0'
-    highest_score = -999
+    # Call LLM for speaker detection
+    detection_result = _detect_speakers_with_llm(raw_transcript)
     
-    for speaker, scores in speaker_profiles.items():
-        net_score = scores['agent_score'] - scores['customer_score']
-        if net_score > highest_score:
-            highest_score = net_score
-            agent_speaker = speaker
+    if detection_result and 'support_speaker' in detection_result:
+        return detection_result['support_speaker']
     
-    return agent_speaker
+    # Fallback: if LLM detection fails, assume second speaker is agent
+    speakers = sorted(set(msg.get('_raw_speaker', '') for msg in temp_messages))
+    return speakers[1] if len(speakers) > 1 else (speakers[0] if speakers else 'speaker_0')
 
 
 def _parse_elevenlabs_transcript(transcription):

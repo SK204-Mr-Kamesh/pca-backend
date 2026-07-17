@@ -140,12 +140,13 @@ def get_pca_analytics():
                 if coaching_priorities and isinstance(coaching_priorities, list):
                     coaching_priorities_all.extend(coaching_priorities)
             
-            # Customer satisfaction
+            # Customer satisfaction - use this for sentiment_distribution
             csat = None
             if analytics.customer_satisfaction is not None:
                 try:
                     csat = float(analytics.customer_satisfaction)
                     customer_satisfactions.append(csat)
+                    sentiments.append(csat)  # Use customer_satisfaction for sentiment_distribution
                 except (TypeError, ValueError):
                     pass
             
@@ -304,17 +305,28 @@ def _get_empty_analytics():
 
 
 def _get_upload_volume_trend(records):
-    """Get upload volume per day for last 7 days"""
+    """Get upload volume per day for last 7 days in IST"""
     trend = {}
-    today = datetime.now(timezone.utc).date()
+    
+    # IST is UTC+5:30
+    ist_offset = timezone(timedelta(hours=5, minutes=30))
+    today_ist = datetime.now(ist_offset).date()
     
     for i in range(7):
-        date = (today - timedelta(days=i)).isoformat()
+        date = (today_ist - timedelta(days=i)).isoformat()
         trend[date] = 0
     
     for record in records:
         if record.created_on:
-            date = record.created_on.date().isoformat()
+            # Convert UTC timestamp to IST
+            if record.created_on.tzinfo is None:
+                # If naive, assume UTC
+                utc_time = record.created_on.replace(tzinfo=timezone.utc)
+            else:
+                utc_time = record.created_on
+            
+            ist_time = utc_time.astimezone(ist_offset)
+            date = ist_time.date().isoformat()
             if date in trend:
                 trend[date] += 1
     

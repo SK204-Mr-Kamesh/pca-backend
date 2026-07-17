@@ -49,7 +49,7 @@ def update_progress(call_id, step, status='processing', message='', details=None
     print(f"[PCA] {message}")
 
 
-def process_upload_async(file_data, call_id, caller_name, notes, original_filename, audio_size):
+def process_upload_async(file_data, call_id, caller_name, notes, original_filename, audio_size, agent_id='Unknown'):
     """Background task to process the upload"""
     try:
         from datetime import timedelta
@@ -59,7 +59,7 @@ def process_upload_async(file_data, call_id, caller_name, notes, original_filena
         
         # Upload audio to S3
         update_progress(call_id, 'upload_audio', 'processing', 
-                       f"Uploading audio")
+                       f"Uploading audio for agent: {agent_id}")
         
         # Create file object from bytes
         file_obj = BytesIO(file_data)
@@ -111,6 +111,7 @@ def process_upload_async(file_data, call_id, caller_name, notes, original_filena
         payload = {
             'call_id': call_id,
             'session_id': call_id,
+            'agent_id': agent_id,  # Use the agent_id from upload
             'from_phone': caller_name or 'Unknown',
             'to_phone': 'Unknown',
             'language': detected_language,
@@ -146,6 +147,12 @@ def upload_call():
     Upload audio file + metadata → return call_id immediately → process in background
     Frontend: POST /api/pca/uploads (multipart)
     Language is auto-detected from transcript
+    
+    Form parameters:
+    - file: audio file (binary)
+    - agentName: agent name (e.g., "Enma") - will be mapped to agent_id
+    - callerName: customer phone/name (optional)
+    - notes: call notes (optional)
     """
     try:
         # Get file
@@ -156,10 +163,14 @@ def upload_call():
         if file.filename == '':
             return error_response('Empty filename', 400)
         
-        # Get metadata from form data (no language field needed)
+        # Get metadata from form data
+        agent_name = request.form.get('agentName', '').strip()  # Agent name from frontend
         caller_name = request.form.get('callerName', '').strip()
         notes = request.form.get('notes', '').strip()
         original_filename = secure_filename(file.filename)
+        
+        # Map agent name to agent_id (use agent_name as agent_id directly)
+        agent_id = agent_name if agent_name else 'Unknown'
         
         # Get file size and read file data
         file.seek(0, os.SEEK_END)
@@ -172,12 +183,12 @@ def upload_call():
         
         # Initialize progress
         update_progress(call_id, 'initiated', 'processing', 
-                       f"Upload started")
+                       f"Upload started for agent: {agent_id}")
         
         # Start background processing
         thread = threading.Thread(
             target=process_upload_async,
-            args=(file_data, call_id, caller_name, notes, original_filename, audio_size)
+            args=(file_data, call_id, caller_name, notes, original_filename, audio_size, agent_id)
         )
         thread.daemon = True
         thread.start()
@@ -185,6 +196,7 @@ def upload_call():
         # Return immediately with call_id
         return success_response('Upload started, processing in background', {
             'callId': call_id,
+            'agentId': agent_id,
             'message': 'Poll /api/pca/calls/{callId}/processing for status'
         })
         
@@ -372,6 +384,53 @@ def get_processing_status(call_id):
     except Exception as e:
         print(f"[PCA] Get processing status failed: {e}")
         return error_response(f'Failed to get status: {str(e)}', 500)
+
+
+# ── POST /api/pca/calls/{callId}/re-analyze ───────────────────────────────────
+
+@pca_bp.route('/pca/calls/<string:call_id>/re-analyze', methods=['POST'])
+def re_analyze_call(call_id):
+    """
+    Re-analyze an existing call using current analysis logic
+    Frontend: POST /api/pca/calls/{callId}/re-analyze
+    
+    This will:
+    1. Keep the existing transcript and recording
+    2. Run fresh sentiment analysis using current prompts
+    3. Run fresh validation analysis using current scoring
+    4. Store results in exactly the same way as new uploads
+    """
+    try:
+        # Check if call exists
+        record = ch.get_record(call_id)
+        if not record:
+            return error_response('Call not found', 404)
+        
+        # Re-analyze the call with force=True to overwrite existing analytics
+        print(f"[PCA] Re-analyzing call {call_id}")
+        analytics = pca_service.analyze_call(call_id, force=True)
+        
+        if analytics is None:
+            return error_response('Re-analysis failed', 500)
+        
+        return success_response('Call re-analyzed successfully', {
+            'callId': call_id,
+            'reanalyzed': True,
+            'analytics': {
+                'overallSentiment': float(analytics.overall_sentiment) if analytics.overall_sentiment else None,
+                'customerSatisfaction': float(analytics.customer_satisfaction) if analytics.customer_satisfaction else None,
+                'agentPerformance': float(analytics.agent_performance) if analytics.agent_performance else None,
+                'skillLevel': analytics.skill_level,
+                'validationScore': float(analytics.validation_score) if analytics.validation_score else None,
+                'validationPercentage': float(analytics.validation_percentage) if analytics.validation_percentage else None
+            }
+        })
+        
+    except Exception as e:
+        print(f"[PCA] Re-analyze call failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return error_response(f'Failed to re-analyze call: {str(e)}', 500)
 
 
 # ── GET /api/pca/analytics/aggregate ──────────────────────────────────────────

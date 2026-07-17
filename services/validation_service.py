@@ -171,6 +171,50 @@ def validate_call_transcript(conversation_text: str) -> Dict[str, Any]:
         
         # Validate and ensure proper structure
         if results and "validation" in results:
+            validation_data = results["validation"]
+            
+            # Manual calculation of totals from individual scores (don't trust LLM math)
+            total_score = 0.0
+            max_score = 54  # Always 54 total points
+            
+            score_map = {
+                "greetings": 5,
+                "crm_query_paraphrase": 5,
+                "energy_enthusiasm_pace": 5,
+                "listening_acknowledgment": 5,
+                "grammar_vocabulary": 5,
+                "apology_empathy": 5,
+                "dead_air_hold_process": 6,
+                "good_right_probing": 12,
+                "correct_closing": 6
+            }
+            
+            for param_name, max_val in score_map.items():
+                if param_name in validation_data:
+                    param_data = validation_data[param_name]
+                    if isinstance(param_data, dict) and 'score' in param_data:
+                        try:
+                            score = float(param_data['score'])
+                            total_score += score
+                        except (TypeError, ValueError):
+                            pass
+            
+            # Recalculate totals manually (override LLM calculations)
+            percentage = (total_score / max_score) * 100
+            
+            # Update validation data with correct totals
+            validation_data["total_earned_score"] = round(total_score, 1)
+            validation_data["max_possible_score"] = max_score
+            validation_data["percentage"] = round(percentage, 2)
+            
+            # Recalculate skill level based on correct percentage
+            if percentage >= 80:
+                validation_data["skill_level"] = "Expert"
+            elif percentage >= 50:
+                validation_data["skill_level"] = "Intermediate"
+            else:
+                validation_data["skill_level"] = "Novice"
+            
             return results
         
         # Fallback if AI didn't wrap in "validation" key
