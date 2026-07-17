@@ -59,7 +59,6 @@ def get_pca_analytics():
         average_call_duration_minutes = average_duration_seconds / 60
         
         # Initialize collections
-        sentiments = []
         customer_satisfactions = []
         wait_times = []
         sla_compliances = []
@@ -85,18 +84,6 @@ def get_pca_analytics():
                 }
             
             if analytics.raw_model_response and isinstance(analytics.raw_model_response, dict):
-                # Sentiment metrics
-                overall_sentiment = analytics.raw_model_response.get('overall_sentiment')
-                if overall_sentiment is not None:
-                    try:
-                        sentiment_val = float(overall_sentiment)
-                        sentiments.append(sentiment_val)
-                        agent_performance_details[agent_id]['calls'].append({
-                            'call_id': call_id,
-                            'sentiment': sentiment_val
-                        })
-                    except (TypeError, ValueError):
-                        pass
                 
                 # Wait time
                 avg_wait_time = analytics.raw_model_response.get('avg_wait_time')
@@ -146,7 +133,6 @@ def get_pca_analytics():
                 try:
                     csat = float(analytics.customer_satisfaction)
                     customer_satisfactions.append(csat)
-                    sentiments.append(csat)  # Use customer_satisfaction for sentiment_distribution
                 except (TypeError, ValueError):
                     pass
             
@@ -181,19 +167,15 @@ def get_pca_analytics():
                 agent_scores[agent_id]['performance_scores'].append(agent_perf)
             if csat is not None:
                 agent_scores[agent_id]['satisfaction_scores'].append(csat)
+                agent_scores[agent_id]['sentiment_scores'].append(csat)
             if sla_compliance is not None:
                 agent_scores[agent_id]['sla_scores'].append(float(sla_compliance))
             if analytics.raw_model_response and isinstance(analytics.raw_model_response, dict):
                 compliance_flags = analytics.raw_model_response.get('compliance_flags', [])
                 agent_scores[agent_id]['compliance_count'] += len(compliance_flags)
-            if overall_sentiment is not None:
-                try:
-                    agent_scores[agent_id]['sentiment_scores'].append(float(overall_sentiment))
-                except (TypeError, ValueError):
-                    pass
         
         # Calculate averages (keep as precise floats)
-        average_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0.0
+        average_sentiment = sum(customer_satisfactions) / len(customer_satisfactions) if customer_satisfactions else 0.0
         average_customer_satisfaction = sum(customer_satisfactions) / len(customer_satisfactions) if customer_satisfactions else 0.0
         average_wait_time_seconds = sum(wait_times) / len(wait_times) if wait_times else 0.0
         average_sla_compliance = sum(sla_compliances) / len(sla_compliances) if sla_compliances else 0.0
@@ -203,8 +185,8 @@ def get_pca_analytics():
         # Upload volume (per day for last 7 days)
         upload_volume = _get_upload_volume_trend(all_records)
         
-        # Sentiment distribution (positive/neutral/negative)
-        sentiment_distribution = _get_sentiment_distribution(sentiments)
+        # Sentiment distribution (positive/neutral/negative) - based on customer_satisfaction
+        sentiment_distribution = _get_sentiment_distribution(customer_satisfactions)
         
         # Language distribution
         language_distribution = _get_language_distribution(languages)
@@ -217,7 +199,7 @@ def get_pca_analytics():
         
         # Executive AI summary (top insights)
         executive_summary = _get_executive_summary(
-            sentiments, 
+            customer_satisfactions, 
             sla_compliances, 
             abandonment_rates,
             len(analytics_map)
