@@ -33,14 +33,23 @@ def init_db():
         print("[PCA] ClickHouse initialized")
     except Exception as e:
         print(f"[PCA] Warning: ClickHouse init failed: {e}")
+    
+    try:
+        import instore_clickhouse as instore_ch
+        instore_ch.ensure_tables()
+        print("[InStore] ClickHouse initialized")
+    except Exception as e:
+        print(f"[InStore] Warning: ClickHouse init failed: {e}")
 
 # Register blueprints
 from controllers.pca_controller import pca_bp
 from controllers.instore_controller import instore_bp
 from controllers.pca_analytics_controller import analytics_bp
+from controllers.instore_analytics_controller import instore_analytics_bp
 app.register_blueprint(pca_bp, url_prefix='/api')
 app.register_blueprint(instore_bp, url_prefix='/api')
 app.register_blueprint(analytics_bp, url_prefix='/api')
+app.register_blueprint(instore_analytics_bp, url_prefix='/api')
 
 # Initialize on startup
 with app.app_context():

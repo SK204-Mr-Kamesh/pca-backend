@@ -70,7 +70,7 @@ def process_upload_async(file_data, interaction_id, customer_name, store_id, sal
         update_progress(interaction_id, 'transcribe_audio', 'processing',
                        'Transcribing audio')
         
-        transcript_messages = transcribe_audio(recording_s3_key, 'en-US')
+        transcript_messages = transcribe_audio(recording_s3_key, 'en-US', 'instore')
         
         update_progress(interaction_id, 'transcribe_audio', 'completed',
                        'Transcription completed')
@@ -400,9 +400,9 @@ def get_interaction(interaction_id):
             data['actionItems'] = analytics.action_items or []
             data['matrices'] = analytics.to_dict()
             data['sentiment'] = {
-                'overallSentiment': float(analytics.overall_sentiment) if analytics.overall_sentiment is not None else 0,
-                'customerSatisfaction': float(analytics.customer_satisfaction) if analytics.customer_satisfaction is not None else 0,
-                'salesExecutivePerformance': float(analytics.sales_executive_performance) if analytics.sales_executive_performance is not None else 0,
+                'overallSentiment': round(float(analytics.overall_sentiment), 2) if analytics.overall_sentiment is not None else 0,
+                'customerSatisfaction': round(float(analytics.customer_satisfaction), 2) if analytics.customer_satisfaction is not None else 0,
+                'salesExecutivePerformance': round(float(analytics.sales_executive_performance), 2) if analytics.sales_executive_performance is not None else 0,
                 'keyIndicators': analytics.key_indicators or []
             }
             if analytics.raw_model_response and isinstance(analytics.raw_model_response, dict):
@@ -413,6 +413,10 @@ def get_interaction(interaction_id):
                 data['competitorIntelligence'] = competitor_intelligence if competitor_intelligence else []
                 interaction_matrices = analytics.raw_model_response.get('interaction_matrices', {})
                 data['interactionMatrices'] = interaction_matrices if interaction_matrices else {}
+                compliance_flags = analytics.raw_model_response.get('compliance_flags', [])
+                data['complianceFlags'] = compliance_flags if compliance_flags else []
+                sla_compliance = analytics.raw_model_response.get('sla_compliance', 0)
+                data['slaCompliance'] = sla_compliance
         
         return success_response('Interaction details retrieved', data)
         

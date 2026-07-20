@@ -38,9 +38,7 @@ Analyze it and respond with ONLY a single valid JSON object — no prose, no mar
 
 The JSON must have exactly these keys:
 {
-  "overall_sentiment": <number 0-10>,
   "customer_satisfaction": <number 0-10>,
-  "sales_executive_performance": <number 0-10>,
   "summary": "<3-5 sentence summary of the interaction>",
   "topics": ["<short topic>", ...],
   "action_items": ["<action item>", ...],
@@ -98,8 +96,40 @@ The JSON must have exactly these keys:
     "customer_intent": "<What did the customer want to achieve? Brief description>",
     "competitor_mentioned": "<Yes|No - did customer mention competitors?>",
     "follow_up_required": "<Yes|No - does this need follow-up?>"
-  }
+  },
+  "compliance_flags": [
+    {
+      "severity": "<critical|high|medium|low>",
+      "category": "<category of compliance issue>",
+      "description": "<what policy or standard was violated>",
+      "evidence": "<specific quote or reference from transcript>",
+      "timestamp": "<when it occurred in the interaction>"
+    }
+  ],
+  "sla_compliance": <percentage 0-100>
 }
+
+TOPICS DISCUSSED:
+You MUST select topics from this predefined list only. Do NOT generate random topics:
+- Mattresses (Memory Foam, Ortho, Dual Comfort, Latex)
+- Pillows (Cervical, Memory Foam, Regular)
+- Bed Frames & Storage Beds
+- Sofas & Recliners
+- Study Tables & Chairs
+- Dining Tables & Chairs
+- Wardrobes & Storage Solutions
+- Shoe Racks
+- Bedding (Sheets, Comforters, Protectors)
+- Customization Options
+- Delivery & Installation
+- Warranty & Return Policy
+- Pricing & Discounts
+- Product Comparison
+- Trial Period
+- Financing Options
+- Product Care & Maintenance
+
+Select only the topics that were actually discussed in the interaction. If a topic was discussed, include it in the topics array.
 
 LEARNING & DEVELOPMENT SUGGESTIONS FOR SALES EXECUTIVES:
 Analyze the sales executive's performance and suggest ONE specific improvement:
@@ -129,7 +159,22 @@ Examples of BAD evidence:
 ✗ "Executive did well with objection handling"- Only suggest improvements, not praise
 
 COMPETITOR INTELLIGENCE EXTRACTION FOR RETAIL:
-When customer mentions any competitor store or brand or compares Wakefit with another furniture/mattress brand:
+
+**IMPORTANT: Only extract DIRECT BRAND COMPETITORS - NOT marketplaces or online platforms**
+
+INCLUDE (Direct Furniture/Mattress Brand Competitors):
+✓ Sleepwell, Kurlon, Duroflex, Pepperfry, Urban Ladder, IKEA
+✓ Godrej Interio, Nilkamal, @home, Hometown, FabIndia
+✓ Casper, Emma, Sunday, SleepyCat, The Sleep Company
+✓ Any other furniture/mattress brand stores mentioned by customer
+
+EXCLUDE (Do NOT track these as competitors):
+✗ Amazon, Flipkart, Myntra, Snapdeal, Meesho, eBay
+✗ Any e-commerce marketplace or online shopping platform
+✗ Payment platforms, delivery services, logistics companies
+
+EXTRACTION RULES:
+When customer mentions a DIRECT BRAND COMPETITOR (from INCLUDE list above):
 - Extract competitor company/brand name exactly as stated
 - Extract specific product/feature mentioned (e.g., "memory foam", "ergonomic design", "durability", "price point")
 - Classify comparison type: cheaper, better_feature, quality, service, delivery, warranty, other
@@ -140,8 +185,14 @@ When customer mentions any competitor store or brand or compares Wakefit with an
   - suggestion: customer suggesting Wakefit adopt competitor's approach
   - neutral: factual comparison without emotion
 - Include exact details from customer's statement
-- **IMPORTANT: EXCLUDE marketplace platforms (Amazon, Flipkart, eBay, etc.) - only include direct brand competitors (e.g., Sleepwell, Kurlon, Godrej, etc.)**
-- Return empty array if NO competitor mentions OR only marketplace platforms mentioned: "competitor_intelligence": []
+
+If customer ONLY mentions marketplaces (Amazon, Flipkart, etc.) or NO competitors at all:
+- Return empty array: "competitor_intelligence": []
+
+Examples:
+- Customer: "I saw this on Amazon" → competitor_intelligence = [] (marketplace, not competitor)
+- Customer: "Sleepwell has better pricing" → competitor_intelligence = [{"competitor_name": "Sleepwell", ...}] (direct competitor)
+- Customer: "Flipkart delivery is fast" → competitor_intelligence = [] (marketplace service, not product competitor)
 
 PRODUCTS DISCUSSED:
 - If multiple products are discussed, create separate entries for each product
@@ -182,11 +233,62 @@ SALES EXECUTIVE EVALUATION MATRIX (Scoring 0-10 for each):
 
 SCORING GUIDELINES (0-10 scale for overall metrics):
 
-**overall_sentiment**: Rate the overall tone and emotional quality
-- 8-10: Positive, friendly, engaged customer throughout
-- 5-7: Neutral or mixed emotions, customer browsing casually
-- 2-4: Negative tone, customer frustrated, uninterested, or dissatisfied
-- 0-1: Highly negative, customer upset or hostile
+**customer_satisfaction**: Rate how satisfied the customer appears
+- 8-10: Customer very happy with service, made purchase or strong intent
+- 5-7: Customer neutral, still deciding, no strong signals
+- 2-4: Customer expresses concerns, doubts, or dissatisfaction
+- 0-1: Customer very unhappy, leaves dissatisfied
+
+SLA COMPLIANCE FOR IN-STORE SALES (GRADUATED scoring: 0%, 25%, 50%, 75%, 100%)
+
+DEFINITION: SLA Compliance measures adherence to Wakefit's in-store sales standards - the predefined
+performance standards and customer service commitments.
+
+SCORING FRAMEWORK (Graduated - Per Interaction Basis):
+
+An interaction receives a graduated compliance score based on how many criteria are met:
+
+COMPLIANCE CRITERIA (Check all 3):
+
+1. GREETING & ENGAGEMENT (Threshold)
+   - Standard: Sales executive must greet customer within first 30 seconds of interaction
+   - Measurement: Check if greeting/acknowledgment appears in first messages
+   - Status: YES if proper greeting within 30 sec, NO if no greeting or delayed
+   - Evidence: Look at first sales executive message for greeting
+
+2. NEEDS DISCOVERY (Threshold)
+   - Standard: Sales executive must ask discovery questions before recommending products
+   - Measurement: Does executive ask about needs, preferences, budget before pitching?
+   - Status: YES if asks questions, NO if immediately pushes products without discovery
+   - Evidence: Check if executive asks questions like "What are you looking for?", "What's your budget?", etc.
+
+3. PRODUCT KNOWLEDGE & ACCURACY (Threshold)
+   - Standard: All product information provided must be accurate (no false claims)
+   - Measurement: Check if any misinformation, false promises, or inaccurate specs mentioned
+   - Status: YES if all information accurate, NO if any false/misleading claims
+   - Evidence: Look for compliance_flags with "Misrepresentation" category
+
+SCORING LOGIC (Graduated Based on Criteria Met):
+- If 0 criteria met → sla_compliance = 0 (no compliance)
+- If 1 criterion met → sla_compliance = 25 (minimal compliance)
+- If 2 criteria met → sla_compliance = 50 (partial compliance)
+- If 3 criteria met → sla_compliance = 75 (substantial compliance)
+- If all 3 criteria met PLUS excellent customer experience → sla_compliance = 100 (full compliance)
+
+RATIONALE: Graduated scoring recognizes that partial adherence is better than none,
+allowing for realistic retail metrics where perfect compliance is rare.
+
+Example Calculation:
+- Interaction A: Greeting ✅, Discovery ✅, Accurate info ✅ → 3/3 criteria → 75-100%
+- Interaction B: No greeting ❌, Discovery ✅, Accurate info ✅ → 2/3 criteria → 50%
+
+OVERALL SENTIMENT & SALES EXECUTIVE PERFORMANCE CALCULATION:
+Do NOT include "overall_sentiment" or "sales_executive_performance" in the response. 
+These will be automatically calculated as:
+- sales_executive_performance = average of 5 SALES EXECUTIVE EVALUATION MATRIX scores (communication, discovery, solution_fit, sales_execution, customer_experience)
+- overall_sentiment = (customer_satisfaction + sales_executive_performance) / 2
+
+SCORING GUIDELINES (0-10 scale for overall metrics):
 
 **customer_satisfaction**: Rate how satisfied the customer appears
 - 8-10: Customer very happy with service, made purchase or strong intent
@@ -194,11 +296,25 @@ SCORING GUIDELINES (0-10 scale for overall metrics):
 - 2-4: Customer expresses concerns, doubts, or dissatisfaction
 - 0-1: Customer very unhappy, leaves dissatisfied
 
-**sales_executive_performance**: Rate the sales executive's overall effectiveness
-- 8-10: Excellent product knowledge, engagement, technique, closes effectively
-- 5-7: Adequate performance, answers questions but lacks proactive selling
-- 2-4: Poor engagement, limited product knowledge, misses opportunities
-- 0-1: Very poor performance, unprofessional, pushes too hard or ignores customer
+COMPLIANCE & RISK FLAGS:
+Check for violations of sales policies and ethical standards:
+- Misrepresentation: False claims about products, features, or benefits
+- Pressure Tactics: Aggressive selling, rushing customer, creating false urgency
+- Privacy Violations: Improper handling of customer personal information
+- Discrimination: Biased treatment based on protected characteristics
+- Safety Issues: Ignoring safety concerns or product warnings
+- Price Manipulation: Unauthorized discounts or misleading pricing
+- Data Security: Insecure handling of payment information
+- Professional Conduct: Rudeness, inappropriate language, disrespect
+
+For each flag:
+- severity: critical (immediate escalation), high (management review), medium (coaching), low (minor note)
+- category: type of violation
+- description: what standard was violated
+- evidence: exact quote from transcript
+- timestamp: when it occurred
+
+If NO compliance issues found, return empty array: "compliance_flags": []
 
 Be realistic with scores. Typical interaction should score 6-8, not perfect 10s.
 Base all ratings strictly on evidence from the transcript provided."""
@@ -229,6 +345,56 @@ def analyze_instore_interaction(messages, interaction_id=None):
         
         text = response["output"]["message"]["content"][0]["text"].strip()
         parsed = _parse_json(text)
+        
+        # Calculate sales_executive_performance from the 5 SALES EXECUTIVE EVALUATION MATRIX metrics
+        interaction_matrices = parsed.get('interaction_matrices', {})
+        if interaction_matrices:
+            scores = []
+            for metric in ['communication', 'discovery', 'solution_fit', 'sales_execution', 'customer_experience']:
+                metric_data = interaction_matrices.get(metric, {})
+                if isinstance(metric_data, dict) and 'score' in metric_data:
+                    try:
+                        score = float(metric_data['score'])
+                        scores.append(score)
+                    except (TypeError, ValueError):
+                        pass
+            
+            if scores:
+                # Average of 5 metrics (already on 0-10 scale)
+                sales_executive_performance = sum(scores) / len(scores)
+                parsed['sales_executive_performance'] = round(sales_executive_performance, 2)
+                
+                # Also store as average_score in interaction_matrices
+                interaction_matrices['average_score'] = round(sales_executive_performance, 2)
+            else:
+                parsed['sales_executive_performance'] = None
+        else:
+            parsed['sales_executive_performance'] = None
+        
+        # Calculate overall_sentiment = (customer_satisfaction + sales_executive_performance) / 2
+        csat = parsed.get('customer_satisfaction')
+        sales_perf = parsed.get('sales_executive_performance')
+        
+        if csat is not None and sales_perf is not None:
+            try:
+                overall_sentiment = (float(csat) + float(sales_perf)) / 2
+                parsed['overall_sentiment'] = round(overall_sentiment, 2)
+            except (TypeError, ValueError):
+                parsed['overall_sentiment'] = None
+        else:
+            parsed['overall_sentiment'] = None
+        
+        # Calculate interaction_matrices total and percentage
+        if interaction_matrices and scores:
+            # Each metric is out of 10, so total is out of 50
+            total_possible = 50
+            total_points = sum(scores)
+            percentage = (total_points / total_possible) * 100
+            
+            interaction_matrices['total_points'] = round(total_points, 2)
+            interaction_matrices['total_possible'] = total_possible
+            interaction_matrices['percentage'] = round(percentage, 2)
+            parsed['interaction_matrices'] = interaction_matrices
         
         print(f"[InStore] Analysis complete for {interaction_id or 'interaction'}")
         return parsed

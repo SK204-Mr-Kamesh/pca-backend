@@ -32,9 +32,29 @@ def _get_elevenlabs_client():
     )
 
 
-def _detect_speakers_with_llm(raw_transcript):
-    """Use LLM to detect which speaker is customer and which is customer support"""
-    speaker_detection_prompt = """You are an expert at analyzing call transcripts.
+def _detect_speakers_with_llm(raw_transcript, interaction_type='pca'):
+    """Use LLM to detect which speaker is customer and which is customer support/sales executive"""
+    
+    if interaction_type == 'instore':
+        speaker_detection_prompt = """You are an expert at analyzing in-store sales interaction transcripts.
+
+Given a raw transcript with speaker labels (speaker_0, speaker_1, etc.), identify which speaker is the customer and which is the sales executive.
+
+Look for:
+- Sales executive behaviors: product knowledge, asking discovery questions, making recommendations, handling objections, closing techniques
+- Sales executive language: "Let me show you", "We have", "This product features", "What are you looking for?"
+- Customer behaviors: asking questions, expressing needs, raising concerns, making decisions
+- Customer language: "I need", "How much", "Can you show me", "I'm looking for"
+
+Return a JSON object with:
+{
+  "customer_speaker": "speaker_0" or "speaker_1" (whoever is the customer shopping),
+  "sales_executive_speaker": "speaker_0" or "speaker_1" (whoever is the Wakefit sales executive),
+  "confidence": "high" or "medium" or "low",
+  "reasoning": "<brief explanation>"
+}"""
+    else:
+        speaker_detection_prompt = """You are an expert at analyzing call transcripts.
 
 Given a raw transcript with speaker labels (speaker_0, speaker_1, etc.), identify which speaker is the customer and which is the customer support representative.
 
@@ -216,9 +236,15 @@ def _word_format(text):
     return corrected_text
 
 
-def transcribe_audio(s3_key, language_code='en-US'):
+def transcribe_audio(s3_key, language_code='en-US', interaction_type='pca'):
     """
     Transcribe audio using ElevenLabs with enhanced language detection
+    
+    Args:
+        s3_key: S3 key where audio file is stored
+        language_code: Language code for transcription
+        interaction_type: 'pca' for customer support calls, 'instore' for sales interactions
+    
     Returns transcript messages in format: [{'role': 'user'/'agent', 'text': '...', 'timestamp': '...'}]
     """
     s3_client = _get_s3_client()
@@ -247,7 +273,7 @@ def transcribe_audio(s3_key, language_code='en-US'):
     )
     
     # Parse ElevenLabs response into messages
-    messages = _parse_elevenlabs_transcript(transcription)
+    messages = _parse_elevenlabs_transcript(transcription, interaction_type)
     
     # Enhanced language detection after transcription
     detected_language = detect_language_improved(messages)
@@ -339,14 +365,18 @@ def detect_language_improved(transcript_messages):
     else:
         return 'en-US'  # Predominantly English
 
-def _detect_agent_speaker(temp_messages):
+def _detect_agent_speaker(temp_messages, interaction_type='pca'):
     """
-    Detect agent speaker using LLM analysis of transcript.
+    Detect agent speaker using LLM analysis of first 5 minutes of transcript.
     
-    The LLM examines the conversation to identify who is the customer and who is customer support.
+    The LLM examines the conversation to identify who is the customer and who is customer support/sales executive.
     This is more accurate than pattern matching as it understands context.
     
-    Returns: speaker ID (string) of the agent
+    Args:
+        temp_messages: List of message dictionaries
+        interaction_type: 'pca' for customer support calls, 'instore' for sales interactions
+    
+    Returns: speaker ID (string) of the agent/sales executive
     """
     if not temp_messages:
         return 'speaker_0'
@@ -355,27 +385,48 @@ def _detect_agent_speaker(temp_messages):
         # Single speaker case - can't determine, assume speaker_0 is agent
         return temp_messages[0].get('_raw_speaker', 'speaker_0')
     
-    # Build raw transcript format for LLM
-    raw_transcript = ""
+    # Filter to first 5 minutes (300 seconds) of the call
+    raw_message = []
     for msg in temp_messages:
+        start_time = msg.get('start_time', 0)
+        if start_time <= 300:  # 5 minutes = 300 seconds
+            raw_message.append(msg)
+        else:
+            break
+    
+    messages_to_analyze = raw_message if raw_message else temp_messages[:5]
+    
+    raw_transcript = ""
+    for msg in messages_to_analyze:
         speaker = msg.get('_raw_speaker', 'unknown')
         text = msg.get('text', '')
         raw_transcript += f"{speaker}: {text}\n"
     
     # Call LLM for speaker detection
-    detection_result = _detect_speakers_with_llm(raw_transcript)
+    detection_result = _detect_speakers_with_llm(raw_transcript, interaction_type)
     
-    if detection_result and 'support_speaker' in detection_result:
-        return detection_result['support_speaker']
+    if detection_result:
+        if interaction_type == 'instore':
+            support_key = 'sales_executive_speaker'
+        else:
+            support_key = 'support_speaker'
+        
+        if support_key in detection_result:
+            return detection_result[support_key]
     
     # Fallback: if LLM detection fails, assume second speaker is agent
-    speakers = sorted(set(msg.get('_raw_speaker', '') for msg in temp_messages))
+    speakers = sorted(set(msg.get('_raw_speaker', '') for msg in messages_to_analyze))
     return speakers[1] if len(speakers) > 1 else (speakers[0] if speakers else 'speaker_0')
 
 
-def _parse_elevenlabs_transcript(transcription):
+def _parse_elevenlabs_transcript(transcription, interaction_type='pca'):
     """
     Parse ElevenLabs output into message format
+    
+    Args:
+        transcription: ElevenLabs transcription object
+        interaction_type: 'pca' for customer support calls, 'instore' for sales interactions
+    
     Returns: [{'role': 'user'/'agent', 'text': '...', 'timestamp': '...', 'start_time': seconds}]
     
     ElevenLabs with diarize=True returns word-level data with speaker labels and timestamps
@@ -463,7 +514,7 @@ def _parse_elevenlabs_transcript(transcription):
         })
     
     # Second pass: Detect which speaker is the agent
-    agent_speaker = _detect_agent_speaker(temp_messages)
+    agent_speaker = _detect_agent_speaker(temp_messages, interaction_type)
     
     # Third pass: Assign correct roles
     for msg in temp_messages:
