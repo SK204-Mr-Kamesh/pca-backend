@@ -46,6 +46,13 @@ The JSON must have exactly these keys:
   "customer_name": "<customer name if mentioned, else null>",
   "interaction_outcome": "<short description of how the interaction ended>",
   "learning_suggestions": "<coaching suggestion for the sales executive on how to improve this interaction>",
+  "coaching_priorities": [
+    {
+      "priority": "<short coaching area name, e.g., 'Product Knowledge', 'Objection Handling', 'Active Listening'>",
+      "score": <number 0-10 rating current performance in this area>,
+      "evidence": "<1-2 sentence example from transcript showing why this needs coaching>"
+    }
+  ],
   "competitor_intelligence": [
     {
       "competitor_name": "<company name if mentioned by customer, else null>",
@@ -100,10 +107,10 @@ The JSON must have exactly these keys:
   "compliance_flags": [
     {
       "severity": "<critical|high|medium|low>",
-      "category": "<category of compliance issue>",
+      "category": "<Misrepresentation|Pressure Tactics|Privacy Violations|Discrimination|Safety Issues|Price Manipulation|Data Security|Professional Conduct|Brand Name Inconsistency>",
       "description": "<what policy or standard was violated>",
-      "evidence": "<specific quote or reference from transcript>",
-      "timestamp": "<when it occurred in the interaction>"
+      "evidence": "<exact quote from transcript showing the violation>",
+      "timestamp": "<approximate time when it occurred, e.g., [02:30]>"
     }
   ],
   "sla_compliance": <percentage 0-100>
@@ -138,6 +145,34 @@ Analyze the sales executive's performance and suggest ONE specific improvement:
 - Example: "The customer expressed concern about mattress firmness at 02:30. You could have asked follow-up questions about their sleep position and firmness preferences before recommending, which would have improved solution fit."
 - Example: "When the customer mentioned budget constraints at 04:15, instead of pushing premium models, you could have shown value-adds in mid-range options or discussed financing options to address their concern."
 - Keep suggestion concise (2-3 sentences max)
+
+COACHING PRIORITIES (Identify 1-3 specific improvement areas):
+For each coaching priority, provide:
+- **priority**: Short name (2-4 words) describing the coaching area
+  Common examples: "Product Knowledge", "Objection Handling", "Active Listening", "Needs Discovery", 
+  "Closing Technique", "Empathy Building", "Time Management", "Follow-up Skills", "Brand Alignment"
+- **score**: Current performance in this area (0-10 scale)
+  - 0-3: Critical gap, immediate coaching needed
+  - 4-6: Moderate weakness, development opportunity
+  - 7-8: Average performance, room for improvement
+  - 9-10: Strong performance, minor refinement
+- **evidence**: 1-2 sentence example from transcript showing why this area needs coaching
+  Include timestamp reference if possible
+
+Identify 1-3 most impactful coaching opportunities based on the transcript.
+If performance is excellent across all areas, you may return empty array: "coaching_priorities": []
+
+Examples:
+{
+  "priority": "Objection Handling",
+  "score": 4,
+  "evidence": "At [04:15], customer raised price concern but executive only offered discount without explaining value proposition"
+}
+{
+  "priority": "Product Knowledge", 
+  "score": 5,
+  "evidence": "Executive couldn't answer specific question about mattress foam density at [02:30], causing customer doubt"
+}
 
 EVIDENCE FORMAT FOR INTERACTION MATRICES:
 For each score (communication, discovery, solution_fit, sales_execution, customer_experience), provide concise evidence:
@@ -297,24 +332,38 @@ SCORING GUIDELINES (0-10 scale for overall metrics):
 - 0-1: Customer very unhappy, leaves dissatisfied
 
 COMPLIANCE & RISK FLAGS:
-Check for violations of sales policies and ethical standards:
-- Misrepresentation: False claims about products, features, or benefits
-- Pressure Tactics: Aggressive selling, rushing customer, creating false urgency
-- Privacy Violations: Improper handling of customer personal information
-- Discrimination: Biased treatment based on protected characteristics
-- Safety Issues: Ignoring safety concerns or product warnings
-- Price Manipulation: Unauthorized discounts or misleading pricing
-- Data Security: Insecure handling of payment information
-- Professional Conduct: Rudeness, inappropriate language, disrespect
+Check for violations of sales policies and ethical standards. Use these EXACT category names:
+- **Misrepresentation**: False claims about products, features, or benefits
+- **Pressure Tactics**: Aggressive selling, rushing customer, creating false urgency
+- **Privacy Violations**: Improper handling of customer personal information
+- **Discrimination**: Biased treatment based on protected characteristics
+- **Safety Issues**: Ignoring safety concerns or product warnings
+- **Price Manipulation**: Unauthorized discounts or misleading pricing
+- **Data Security**: Insecure handling of payment information
+- **Professional Conduct**: Rudeness, inappropriate language, disrespect
+- **Brand Name Inconsistency**: Using wrong company name or inconsistent branding
 
-For each flag:
-- severity: critical (immediate escalation), high (management review), medium (coaching), low (minor note)
-- category: type of violation
-- description: what standard was violated
-- evidence: exact quote from transcript
-- timestamp: when it occurred
+For each flag, return exactly these fields (NO extra fields like "flag"):
+- **severity**: critical | high | medium | low
+  - critical: immediate escalation needed
+  - high: management review required
+  - medium: coaching needed
+  - low: minor note
+- **category**: ONE of the exact categories listed above
+- **description**: Brief explanation of what policy/standard was violated
+- **evidence**: Exact quote from transcript showing the violation
+- **timestamp**: Approximate time in format [MM:SS] when it occurred
 
 If NO compliance issues found, return empty array: "compliance_flags": []
+
+Example of CORRECT compliance flag:
+{
+  "severity": "medium",
+  "category": "Brand Name Inconsistency",
+  "description": "Sales executive used incorrect company name during closing",
+  "evidence": "thank you so much for choosing Great Fit",
+  "timestamp": "[10:11]"
+}
 
 Be realistic with scores. Typical interaction should score 6-8, not perfect 10s.
 Base all ratings strictly on evidence from the transcript provided."""

@@ -132,6 +132,11 @@ def get_instore_analytics():
                 learning_suggestions = analytics.raw_model_response.get('learning_suggestions')
                 if learning_suggestions:
                     sales_executive_details[sales_executive_id]['issues'].append(learning_suggestions)
+                
+                # Collect coaching priorities from LLM response
+                coaching_priorities = analytics.raw_model_response.get('coaching_priorities', [])
+                if coaching_priorities and isinstance(coaching_priorities, list):
+                    coaching_priorities_all.extend(coaching_priorities)
             
             # Language
             if record and record.language:
@@ -194,8 +199,10 @@ def get_instore_analytics():
             len(analytics_map)
         )
         
-        # Coaching priorities
-        coaching_priorities = _get_coaching_priorities(sales_executive_details, sales_executive_scores)
+        # Coaching priorities (try raw data first, fallback to analysis)
+        coaching_priorities = _get_coaching_priorities_from_raw_data(coaching_priorities_all)
+        if not coaching_priorities:
+            coaching_priorities = _get_coaching_priorities(sales_executive_details, sales_executive_scores)
         
         # AI Quality Scorecard (5 metrics per sales executive)
         quality_scorecard = _get_quality_scorecard(analytics_map, records_map)
@@ -462,25 +469,184 @@ Return ONLY a JSON array of strings (no markdown, no extra text):
         return []
 
 
+def _get_coaching_priorities_from_raw_data(coaching_priorities_all):
+    """
+    Aggregate coaching priorities from all interactions
+    Returns top 5 priorities with count and average score
+    """
+    if not coaching_priorities_all:
+        return []
+    
+    priority_map = {}
+    
+    for priority_item in coaching_priorities_all:
+        if isinstance(priority_item, dict):
+            priority_name = priority_item.get('priority', 'Unknown')
+            score = priority_item.get('score', 0)
+            
+            if priority_name not in priority_map:
+                priority_map[priority_name] = {
+                    'priority': priority_name,
+                    'count': 0,
+                    'total_score': 0,
+                    'examples': []
+                }
+            
+            priority_map[priority_name]['count'] += 1
+            priority_map[priority_name]['total_score'] += float(score) if score else 0
+            if 'evidence' in priority_item:
+                priority_map[priority_name]['examples'].append(priority_item['evidence'])
+    
+    # Calculate average scores and sort by count (most frequent first)
+    result = []
+    for priority_data in priority_map.values():
+        avg_score = priority_data['total_score'] / priority_data['count'] if priority_data['count'] > 0 else 0.0
+        result.append({
+            'rank': 0,  # Will be set later
+            'priority': priority_data['priority'],
+            'count': priority_data['count'],
+            'avg_score': round(avg_score, 2),
+            'details': f"Found in {priority_data['count']} interactions, avg score: {avg_score:.1f}/10",
+            'severity': 'HIGH' if avg_score < 5 else 'MED' if avg_score < 7 else 'LOW'
+        })
+    
+    # Sort by count (descending) and take top 5
+    result.sort(key=lambda x: x['count'], reverse=True)
+    
+    # Set ranks
+    for i, item in enumerate(result[:5]):
+        item['rank'] = i + 1
+    
+    return result[:5]
+
+
 def _get_coaching_priorities(sales_executive_details, sales_executive_scores):
-    """Generate coaching priorities for sales executives"""
+    """
+    Generate top coaching priorities based on actual sales executive performance (Fallback method)
+    """
     priorities = []
     
-    # Identify low performers
+    # Find low performers (executives with performance < 6)
+    low_performers = []
     for exec_id, details in sales_executive_details.items():
         if details['low_performers']:
             scores = sales_executive_scores.get(exec_id, {})
-            avg_score = sum(scores.get('performance_scores', [])) / len(scores.get('performance_scores', [1])) if scores.get('performance_scores') else 0
-            
-            priorities.append({
-                'rank': len(priorities) + 1,
-                'priority': f'Low performance: {exec_id}',
-                'details': f'Average score: {avg_score:.1f}/10. Issues: {", ".join(details["issues"][:3])}',
-                'severity': 'HIGH'
+            perf_scores = scores.get('performance_scores', [])
+            avg_perf = sum(perf_scores) / len(perf_scores) if perf_scores else 0
+            low_performers.append({
+                'exec_id': exec_id,
+                'performance': avg_perf,
+                'issues': details['issues'],
+                'interactions': scores.get('interactions', 0)
             })
     
-    # Limit to top 10
-    return priorities[:10]
+    # Sort by performance score
+    low_performers.sort(key=lambda x: x['performance'])
+    
+    # Generate priority 1: Low performers
+    if low_performers:
+        exec_count = len(low_performers)
+        avg_perf = sum(e['performance'] for e in low_performers) / len(low_performers)
+        details_text = f"{exec_count} sales executive(s), avg score {avg_perf:.1f}/10"
+        priorities.append({
+            'rank': 1,
+            'priority': 'Low performance sales executives',
+            'details': details_text,
+            'severity': 'HIGH'
+        })
+    
+    # Generate priority 2: SLA compliance issues
+    sla_issues = []
+    for exec_id, scores in sales_executive_scores.items():
+        sla_scores = scores.get('sla_scores', [])
+        if sla_scores:
+            avg_sla = sum(sla_scores) / len(sla_scores)
+            if avg_sla < 60:
+                sla_issues.append(exec_id)
+    
+    if sla_issues:
+        priorities.append({
+            'rank': 2,
+            'priority': 'Weak SLA compliance',
+            'details': f"{len(sla_issues)} sales executive(s) below 60% SLA threshold — review service standards",
+            'severity': 'HIGH'
+        })
+    
+    # Generate priority 3: Sentiment/customer satisfaction issues
+    low_sentiment_execs = []
+    for exec_id, scores in sales_executive_scores.items():
+        satisfaction_scores = scores.get('satisfaction_scores', [])
+        if satisfaction_scores:
+            avg_csat = sum(satisfaction_scores) / len(satisfaction_scores)
+            if avg_csat < 5:
+                low_sentiment_execs.append(exec_id)
+    
+    if low_sentiment_execs:
+        unique_execs = len(set(low_sentiment_execs))
+        priorities.append({
+            'rank': 3,
+            'priority': 'Low customer satisfaction',
+            'details': f"{unique_execs} sales executive(s) with low CSAT — improve empathy and customer engagement",
+            'severity': 'MED'
+        })
+    
+    # Generate priority 4: Compliance violations
+    compliance_issues = 0
+    for exec_id, details in sales_executive_details.items():
+        compliance_issues += sum(1 for issue in details['issues'] if 'compliance' in issue.lower())
+    
+    if compliance_issues > 0:
+        priorities.append({
+            'rank': 4,
+            'priority': 'Compliance violations detected',
+            'details': f"{compliance_issues} compliance issue(s) — reinforce policy adherence",
+            'severity': 'HIGH'
+        })
+    
+    # Generate priority 5: Development opportunities
+    if len(priorities) < 5:
+        high_interaction_execs = sorted(
+            sales_executive_scores.items(),
+            key=lambda x: x[1]['interactions'],
+            reverse=True
+        )
+        
+        if high_interaction_execs:
+            top_exec = high_interaction_execs[0]
+            top_exec_id = top_exec[0]
+            top_exec_csat = top_exec[1]['satisfaction_scores']
+            avg_csat = sum(top_exec_csat) / len(top_exec_csat) if top_exec_csat else 0
+            
+            if avg_csat > 7:
+                priorities.append({
+                    'rank': 5,
+                    'priority': 'Peer mentoring program',
+                    'details': f"Sales Executive {top_exec_id} (CSAT {avg_csat:.1f}/10) — excellent candidate for mentoring role",
+                    'severity': 'MED'
+                })
+    
+    # Add fallback priorities if needed
+    if len(priorities) < 5:
+        fallbacks = [
+            {
+                'rank': len(priorities) + 1,
+                'priority': 'Product knowledge updates',
+                'details': 'Product knowledge varies across team — schedule refresher training on new collections',
+                'severity': 'MED'
+            },
+            {
+                'rank': len(priorities) + 2,
+                'priority': 'Sales process optimization',
+                'details': 'Review discovery and closing techniques — standardize best practices across team',
+                'severity': 'LOW'
+            }
+        ]
+        for fallback in fallbacks:
+            if len(priorities) < 5:
+                fallback['rank'] = len(priorities) + 1
+                priorities.append(fallback)
+    
+    return priorities[:5]
 
 
 def _get_quality_scorecard(analytics_map, records_map):
