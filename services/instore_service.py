@@ -344,7 +344,7 @@ Check for violations of sales policies and ethical standards. Use these EXACT ca
 - **Brand Name Inconsistency**: Using wrong company name or inconsistent branding
 
 For each flag, return exactly these fields in this exact order:
-- **category**: ONE of the exact categories listed above (FIRST field)
+- **flag**: ONE of the exact categories listed above (FIRST field)
 - **severity**: critical | high | medium | low
   - critical: immediate escalation needed
   - high: management review required
