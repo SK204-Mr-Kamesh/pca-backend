@@ -106,8 +106,8 @@ The JSON must have exactly these keys:
   },
   "compliance_flags": [
     {
+      "flag": "<Misrepresentation|Pressure Tactics|Privacy Violations|Discrimination|Safety Issues|Price Manipulation|Data Security|Professional Conduct|Brand Name Inconsistency>",
       "severity": "<critical|high|medium|low>",
-      "category": "<Misrepresentation|Pressure Tactics|Privacy Violations|Discrimination|Safety Issues|Price Manipulation|Data Security|Professional Conduct|Brand Name Inconsistency>",
       "description": "<what policy or standard was violated>",
       "evidence": "<exact quote from transcript showing the violation>",
       "timestamp": "<approximate time when it occurred, e.g., [02:30]>"
@@ -343,23 +343,23 @@ Check for violations of sales policies and ethical standards. Use these EXACT ca
 - **Professional Conduct**: Rudeness, inappropriate language, disrespect
 - **Brand Name Inconsistency**: Using wrong company name or inconsistent branding
 
-For each flag, return exactly these fields (NO extra fields like "flag"):
+For each flag, return exactly these fields in this exact order:
+- **category**: ONE of the exact categories listed above (FIRST field)
 - **severity**: critical | high | medium | low
   - critical: immediate escalation needed
   - high: management review required
   - medium: coaching needed
   - low: minor note
-- **category**: ONE of the exact categories listed above
 - **description**: Brief explanation of what policy/standard was violated
 - **evidence**: Exact quote from transcript showing the violation
 - **timestamp**: Approximate time in format [MM:SS] when it occurred
 
 If NO compliance issues found, return empty array: "compliance_flags": []
 
-Example of CORRECT compliance flag:
+Example of CORRECT compliance flag structure:
 {
-  "severity": "medium",
   "category": "Brand Name Inconsistency",
+  "severity": "medium",
   "description": "Sales executive used incorrect company name during closing",
   "evidence": "thank you so much for choosing Great Fit",
   "timestamp": "[10:11]"

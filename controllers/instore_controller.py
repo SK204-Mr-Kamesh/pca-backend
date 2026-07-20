@@ -417,6 +417,8 @@ def get_interaction(interaction_id):
                 data['complianceFlags'] = compliance_flags if compliance_flags else []
                 sla_compliance = analytics.raw_model_response.get('sla_compliance', 0)
                 data['slaCompliance'] = sla_compliance
+                coaching_priorities = analytics.raw_model_response.get('coaching_priorities', [])
+                data['coachingPriorities'] = coaching_priorities if coaching_priorities else []
         
         return success_response('Interaction details retrieved', data)
         
