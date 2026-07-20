@@ -50,7 +50,8 @@ The JSON must have exactly these keys:
     {
       "priority": "<short coaching area name, e.g., 'Product Knowledge', 'Objection Handling', 'Active Listening'>",
       "score": <number 0-10 rating current performance in this area>,
-      "evidence": "<1-2 sentence example from transcript showing why this needs coaching>"
+      "evidence": "<1-2 sentence example from transcript showing why this needs coaching>",
+      "suggestion": "<2-3 sentence specific actionable coaching suggestion on how to improve in this area>"
     }
   ],
   "competitor_intelligence": [
@@ -106,7 +107,13 @@ The JSON must have exactly these keys:
   },
   "compliance_flags": [
     {
-      "flag": "<Misrepresentation|Pressure Tactics|Privacy Violations|Discrimination|Safety Issues|Price Manipulation|Data Security|Professional Conduct|Brand Name Inconsistency>",
+      "category": "<Misrepresentation|Pressure Tactics|Privacy Violations|Discrimination|Safety Issues|Price Manipulation|Data Security|Professional Conduct|Brand Name Inconsistency>",
+      "severity": "<critical|high|medium|low>",
+      "description": "<what policy or standard was violated>",
+      "evidence": "<exact quote from transcript showing the violation>",
+      "timestamp": "<precise time in [MM:SS] format or null if uncertain>"
+    }
+  ],
       "severity": "<critical|high|medium|low>",
       "description": "<what policy or standard was violated>",
       "evidence": "<exact quote from transcript showing the violation>",
@@ -157,7 +164,8 @@ For each coaching priority, provide:
   - 7-8: Average performance, room for improvement
   - 9-10: Strong performance, minor refinement
 - **evidence**: 1-2 sentence example from transcript showing why this area needs coaching
-  Include timestamp reference if possible
+  Include specific timestamp reference if possible (use format like [MM:SS] where MM and SS are digits)
+- **suggestion**: 2-3 sentence specific, actionable coaching suggestion on how to improve this area
 
 Identify 1-3 most impactful coaching opportunities based on the transcript.
 If performance is excellent across all areas, you may return empty array: "coaching_priorities": []
@@ -166,12 +174,14 @@ Examples:
 {
   "priority": "Objection Handling",
   "score": 4,
-  "evidence": "At [04:15], customer raised price concern but executive only offered discount without explaining value proposition"
+  "evidence": "At [04:15], customer raised price concern but executive only offered discount without explaining value proposition",
+  "suggestion": "When a customer raises a price objection, first validate their concern by saying something like 'I understand budget is important'. Then reframe the value: 'This mattress includes a 5-year warranty and free delivery, which adds another 15,000 in value'. This helps the customer see the total value before making a decision."
 }
 {
   "priority": "Product Knowledge", 
   "score": 5,
-  "evidence": "Executive couldn't answer specific question about mattress foam density at [02:30], causing customer doubt"
+  "evidence": "Executive couldn't answer specific question about mattress foam density at [02:30], causing customer doubt",
+  "suggestion": "Before your next shift, review the foam density specifications for our top 5 mattress models. Practice a 1-minute explanation of why foam density matters for sleep quality. This will boost customer confidence when technical questions arise."
 }
 
 EVIDENCE FORMAT FOR INTERACTION MATRICES:
@@ -344,7 +354,7 @@ Check for violations of sales policies and ethical standards. Use these EXACT ca
 - **Brand Name Inconsistency**: Using wrong company name or inconsistent branding
 
 For each flag, return exactly these fields in this exact order:
-- **flag**: ONE of the exact categories listed above (FIRST field)
+- **category**: ONE of the exact categories listed above (FIRST field)
 - **severity**: critical | high | medium | low
   - critical: immediate escalation needed
   - high: management review required
@@ -352,7 +362,9 @@ For each flag, return exactly these fields in this exact order:
   - low: minor note
 - **description**: Brief explanation of what policy/standard was violated
 - **evidence**: Exact quote from transcript showing the violation
-- **timestamp**: Approximate time in format [MM:SS] when it occurred
+- **timestamp**: IMPORTANT - Use precise timestamp ONLY if clearly available from the transcript.
+  Format: [MM:SS] where MM is minutes (00-59) and SS is seconds (00-59).
+  NEVER hallucinate or estimate timestamps. If timestamp cannot be determined from transcript, use null.
 
 If NO compliance issues found, return empty array: "compliance_flags": []
 
@@ -363,6 +375,15 @@ Example of CORRECT compliance flag structure:
   "description": "Sales executive used incorrect company name during closing",
   "evidence": "thank you so much for choosing Great Fit",
   "timestamp": "[10:11]"
+}
+
+Example when timestamp is uncertain:
+{
+  "category": "Professional Conduct",
+  "severity": "low",
+  "description": "Slightly dismissive tone when customer asked about warranty",
+  "evidence": "Yeah, it's like any other warranty, doesn't really matter much",
+  "timestamp": null
 }
 
 Be realistic with scores. Typical interaction should score 6-8, not perfect 10s.
