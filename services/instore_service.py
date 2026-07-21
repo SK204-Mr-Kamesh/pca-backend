@@ -66,117 +66,209 @@ def format_transcript_for_instore(messages):
     return "\n".join(lines)
 
 
-_INSTORE_ANALYSIS_PROMPT = """You are an in-store interaction quality analyst for Wakefit retail stores.
-You receive a transcript of a sales interaction in a physical store. The interaction may involve:
-- A Customer (role: "Customer")
-- One or more Sales Executives (role: "Sales Executive (Name)")
-- Store Manager or Supervisor (role: "Store Manager")
-- Other staff members (role: "Staff Member")
+_INSTORE_ANALYSIS_PROMPT = """You are an EXPERT in-store sales interaction analyst for Wakefit retail stores. Your analysis must be EXTREMELY PRECISE and evidence-based.
 
-When multiple sales executives are involved, evaluate them as a team and note individual contributions.
-Focus primarily on the customer's experience with the Wakefit team overall.
+ANALYZE the transcript and return ONLY a valid JSON object (no ```json markdown, no commentary).
 
-Analyze it and respond with ONLY a single valid JSON object — no prose, no markdown fences.
+## CRITICAL: EXACT TIMESTAMPS REQUIRED
+- Use EXACT [MM:SS] timestamps from transcript in ALL evidence and compliance flags
+- NEVER approximate or guess timestamps
+- Timestamps are MANDATORY for precision
 
-🚨 CRITICAL: TIMESTAMP ACCURACY REQUIREMENT 🚨
-The transcript includes timestamps in [MM:SS] format. When referencing any timestamps in your analysis:
-- Use ONLY the EXACT timestamps shown in the transcript
-- DO NOT guess, approximate, or create new timestamps
-- Format all timestamp references as [MM:SS] exactly as shown in transcript
-- This applies to: key_indicators, learning_suggestions, compliance_flags, coaching_priorities
+## JSON STRUCTURE (use EXACTLY these field names):
 
-The JSON must have exactly these keys:
 {
-  "customer_satisfaction": <number 0-10>,
-  "summary": "<3-5 sentence summary of the interaction>",
-  "topics": ["<short topic>", ...],
-  "action_items": ["<action item>", ...],
-  "key_indicators": ["<short observation supporting the sentiment scores>", ...],
-  "customer_name": "<customer name if mentioned, else null>",
-  "interaction_outcome": "<short description of how the interaction ended>",
-  "learning_suggestions": "<coaching suggestion for the sales executive on how to improve this interaction>",
-  "coaching_priorities": [
-    {
-      "priority": "<short coaching area name, e.g., 'Product Knowledge', 'Objection Handling', 'Active Listening'>",
-      "score": <number 0-10 rating current performance in this area>,
-      "evidence": "<1-2 sentence example from transcript showing why this needs coaching>",
-      "suggestion": "<2-3 sentence specific actionable coaching suggestion on how to improve in this area>"
-    }
-  ],
-  "competitor_intelligence": [
-    {
-      "competitor_name": "<company name if mentioned by customer, else null>",
-      "product_mentioned": "<product/feature mentioned in comparison, else null>",
-      "comparison_type": "<what aspect was compared: cheaper|better_feature|quality|service|delivery|warranty|other>",
-      "customer_sentiment": "<appreciation|complaint|query|suggestion|neutral>",
-      "details": "<brief description of what the customer said about competitor>",
-      "timestamp": "<approximate time when mentioned, if trackable>"
-    }
-  ],
-  "products_discussed": [
-    {
-      "product_name": "<specific product name, e.g., 'OrthoLite Memory Foam Mattress'>",
-      "category": "<product category, e.g., 'Mattress', 'Storage', 'Sofa'>",
-      "sub_category": "<more specific category if mentioned>",
-      "discussion_summary": "<brief summary of what was discussed about this product>",
-      "customer_interest_level": "<High|Medium|Low>",
-      "price_discussed": "<Yes|No>",
-      "price_amount": "<price if mentioned, else null>",
-      "objections_raised": ["<list of customer objections or concerns>"],
-      "sales_outcome": "<purchased|interested|not_interested|deferred>",
-      "outcome_reason": "<why the customer made this decision>"
-    }
-  ],
+  "customer_satisfaction": <0-10>,
+  "summary": "<3-5 precise sentences>",
+  "topics": ["<from predefined list only>"],
+  "action_items": ["<specific actionable item>"],
+  "key_indicators": ["<factual observation with timestamp [MM:SS]>"],
+  "customer_name": "<name or null>",
+  "interaction_outcome": "<precise description of final outcome>",
+  "learning_suggestions": "<2-3 sentences with specific example and timestamp [MM:SS]>",
+  "coaching_priorities": [{
+    "priority": "<2-4 word area name>",
+    "score": <0-10>,
+    "evidence": "<factual 1-2 sentences with timestamp [MM:SS]>",
+    "suggestion": "<2-3 specific actionable sentences>"
+  }],
+  "competitor_intelligence": [{
+    "competitor_name": "<brand name ONLY, not marketplaces>",
+    "product_mentioned": "<specific product/feature>",
+    "comparison_type": "<cheaper|better_feature|quality|service|delivery|warranty|other>",
+    "customer_sentiment": "<appreciation|complaint|query|suggestion|neutral>",
+    "details": "<precise description of what customer said>",
+    "timestamp": "<[MM:SS] exact from transcript>"
+  }],
+  "products_discussed": [{
+    "product_name": "<specific product name>",
+    "category": "<Mattress|Pillow|Bed Frame|Sofa|etc>",
+    "sub_category": "<specific type if mentioned>",
+    "discussion_summary": "<factual summary of discussion>",
+    "customer_interest_level": "<High|Medium|Low>",
+    "price_discussed": "<Yes|No>",
+    "price_amount": "<exact amount or null>",
+    "objections_raised": ["<specific customer objection>"],
+    "sales_outcome": "<purchased|interested|not_interested|deferred>",
+    "outcome_reason": "<factual reason why>"
+  }],
   "interaction_matrices": {
-    "communication": {
-      "score": "<score out of 10>",
-      "evidence": "<1-2 sentences explaining why - e.g., 'Clear articulation with minimal hesitations' or 'Multiple grammatical errors and unclear phrasing'>"
-    },
-    "discovery": {
-      "score": "<score out of 10>",
-      "evidence": "<1-2 sentences explaining why - e.g., 'Asked about budget and preferences' or 'Failed to probe customer needs'>"
-    },
-    "solution_fit": {
-      "score": "<score out of 10>",
-      "evidence": "<1-2 sentences - e.g., 'Recommended products matched stated requirements' or 'Recommendations were generic'>"
-    },
-    "sales_execution": {
-      "score": "<score out of 10>",
-      "evidence": "<1-2 sentences - e.g., 'Addressed all objections professionally' or 'Failed to handle price objection'>"
-    },
-    "customer_experience": {
-      "score": "<score out of 10>",
-      "evidence": "<1-2 sentences - e.g., 'Customer felt heard and respected throughout' or 'Customer expressed frustration'>"
-    },
+    "communication": {"score": <0-10>, "evidence": "<factual observation only>"},
+    "discovery": {"score": <0-10>, "evidence": "<factual observation only>"},
+    "solution_fit": {"score": <0-10>, "evidence": "<factual observation only>"},
+    "sales_execution": {"score": <0-10>, "evidence": "<factual observation only>"},
+    "customer_experience": {"score": <0-10>, "evidence": "<factual observation only>"},
     "primary_category": "<main product category discussed>",
     "overall_sales_outcome": "<successful|unsuccessful|deferred_decision>",
-    "customer_intent": "<What did the customer want to achieve? Brief description>",
-    "competitor_mentioned": "<Yes|No - did customer mention competitors?>",
-    "follow_up_required": "<Yes|No - does this need follow-up?>"
+    "customer_intent": "<what customer specifically wanted>",
+    "competitor_mentioned": "<Yes|No>",
+    "follow_up_required": "<Yes|No>",
+    "total_products_discussed": <number of products>,
+    "products_sold": <number of products with sales_outcome=purchased>,
+    "conversion_rate_count": "<products_sold / total_products_discussed>",
+    "conversion_rate_percentage": "<conversion_rate_count * 100>"
   },
-  "compliance_flags": [
-    {
-      "flag": "<Misrepresentation|Pressure Tactics|Privacy Violations|Discrimination|Safety Issues|Price Manipulation|Data Security|Professional Conduct|Brand Name Inconsistency>",
-      "severity": "<critical|high|medium|low>",
-      "description": "<what policy or standard was violated>",
-      "evidence": "<exact quote from transcript showing the violation>",
-      "timestamp": "<precise time in [MM:SS] format - MUST match timestamp from transcript>"
-    }
-  ],
-  "sla_compliance": <percentage 0-100>
+  "compliance_flags": [{
+    "flag": "<Misrepresentation|Pressure Tactics|Privacy Violations|Discrimination|Safety Issues|Price Manipulation|Data Security|Professional Conduct|Brand Name Inconsistency>",
+    "severity": "<critical|high risk|medium risk|low risk>",
+    "description": "<what policy was violated>",
+    "evidence": "<exact quote from transcript>",
+    "timestamp": "<[MM:SS] exact from transcript>"
+  }],
+  "sla_compliance": <0|25|50|75|100>
 }
 
-TOPICS DISCUSSED:
-You MUST select topics from this predefined list only. Do NOT generate random topics:
-- Mattresses (Memory Foam, Ortho, Dual Comfort, Latex)
-- Pillows (Cervical, Memory Foam, Regular)
-- Bed Frames & Storage Beds
-- Sofas & Recliners
-- Study Tables & Chairs
-- Dining Tables & Chairs
-- Wardrobes & Storage Solutions
-- Shoe Racks
-- Bedding (Sheets, Comforters, Protectors)
+## OVERALL SALES OUTCOME RULES (CRITICAL - FOLLOW EXACTLY):
+
+Determine overall_sales_outcome based on products sold:
+
+**successful** - Use when:
+- At least ONE product was sold (sales_outcome = "purchased")
+- Customer completed payment for any product
+- products_sold >= 1
+
+**unsuccessful** - Use when:
+- ZERO products were sold (products_sold = 0)
+- ALL products have sales_outcome = "not_interested"
+- Customer left without buying anything
+
+**deferred_decision** - Use when:
+- ZERO products were sold (products_sold = 0)
+- At least ONE product has sales_outcome = "interested" or "deferred"
+- Customer showed interest but didn't purchase today
+
+**CONVERSION RATE CALCULATION**:
+- total_products_discussed = total count of items in products_discussed array
+- products_sold = count of products with sales_outcome = "purchased"
+- conversion_rate_count = products_sold / total_products_discussed (e.g., "2/5")
+- conversion_rate_percentage = (products_sold / total_products_discussed) * 100 (e.g., 40)
+- If no products discussed, set all to 0
+
+## ULTRA-PRECISE SCORING GUIDELINES (0-10 scale):
+
+**Communication** (Clarity, professionalism, listening):
+- 10: Flawless communication, perfect clarity, exceptional listening, zero hesitations
+- 9: Excellent communication, clear and professional, active listening
+- 8: Very good communication, mostly clear, good listening
+- 7: Good communication, generally clear, adequate listening  
+- 6: Acceptable communication, some unclear moments, basic listening
+- 5: Average communication, frequent unclear moments, passive listening
+- 4: Below average, often unclear, poor listening skills
+- 3: Poor communication, very unclear, dismissive listening
+- 2: Very poor, mostly unclear, ignores customer
+- 1: Terrible communication, unintelligible
+- 0: No meaningful communication
+
+**Discovery** (Understanding needs BEFORE recommending):
+- 10: Asks 4+ targeted questions, fully understands all needs, budget, preferences
+- 9: Asks 3+ targeted questions, understands most needs and budget
+- 8: Asks 2-3 good questions, understands basic needs and some preferences
+- 7: Asks 2 questions, gets basic understanding of needs
+- 6: Asks 1-2 basic questions, partial understanding
+- 5: Asks 1 generic question, minimal understanding
+- 4: Very minimal questioning, makes assumptions
+- 3: Almost no questioning, guesses at needs
+- 2: No real questioning, ignores customer needs
+- 1: Jumps straight to selling without any discovery
+- 0: Completely ignores customer
+
+**Solution Fit** (Do recommendations match actual stated needs):
+- 10: Perfect match to ALL stated needs, explains exactly why it fits
+- 9: Excellent match to most needs, good explanation of fit
+- 8: Good match to main needs, some explanation
+- 7: Decent match to basic needs, basic explanation
+- 6: Partial match to some needs
+- 5: Mediocre match, generic recommendations
+- 4: Poor match to stated needs
+- 3: Very poor match, mostly irrelevant
+- 2: Completely wrong recommendations
+- 1: Recommendations contradict stated needs
+- 0: No recommendations or completely inappropriate
+
+**Sales Execution** (Objection handling, closing, next steps):
+- 10: Expertly handles ALL objections, smooth natural close, crystal clear next steps
+- 9: Handles most objections well, good close attempt, clear next steps
+- 8: Addresses main objections, decent close, some next steps
+- 7: Handles some objections, attempts close, basic next steps
+- 6: Struggles with objections, weak close attempt
+- 5: Minimal objection handling, no clear close
+- 4: Poor objection handling, avoids closing
+- 3: Fails to address concerns, no attempt to close
+- 2: Makes objections worse, pushes without addressing concerns
+- 1: Completely ignores objections, aggressive pushing
+- 0: No sales process whatsoever
+
+**Customer Experience** (Respect, value, satisfaction):
+- 10: Customer feels extremely valued, respected, and satisfied throughout
+- 9: Customer feels very valued and respected, very positive experience
+- 8: Customer feels valued and respected, positive experience
+- 7: Customer feels adequately respected, decent experience
+- 6: Customer feels neutral, neither positive nor negative
+- 5: Customer feels somewhat undervalued, neutral experience
+- 4: Customer feels undervalued, somewhat negative experience
+- 3: Customer feels disrespected, negative experience
+- 2: Customer feels very disrespected, very negative experience
+- 1: Customer feels insulted or mistreated
+- 0: Completely unacceptable treatment
+
+**customer_satisfaction** (Overall happiness with interaction):
+- 10: Customer ecstatic, made purchase with enthusiasm
+- 9: Customer very happy, strong purchase intent or completed purchase
+- 8: Customer satisfied and pleased, considering purchase seriously
+- 7: Customer content, some purchase interest
+- 6: Customer neutral, undecided
+- 5: Customer slightly disappointed, minimal interest
+- 4: Customer somewhat dissatisfied, expressed concerns
+- 3: Customer unhappy, significant concerns
+- 2: Customer very dissatisfied, frustrated
+- 1: Customer angry or upset
+- 0: Customer extremely upset, stormed out
+
+## SLA COMPLIANCE - GRADUATED SCORING (0%, 25%, 50%, 75%, 100%):
+
+**Check these 3 CRITICAL criteria:**
+1. **GREETING & ENGAGEMENT**: Did sales executive greet customer within first 30 seconds? (YES/NO)
+2. **NEEDS DISCOVERY**: Did sales executive ask discovery questions BEFORE recommending products? (YES/NO)  
+3. **PRODUCT ACCURACY**: Was ALL product information accurate with NO false claims? (YES/NO)
+
+**SCORING LOGIC:**
+- 0 criteria met = 0% (Failed all standards)
+- 1 criterion met = 25% (Minimal compliance)
+- 2 criteria met = 50% (Partial compliance) 
+- 3 criteria met = 75% (Substantial compliance)
+- 3 criteria met + customer_satisfaction 8+ = 100% (Excellent compliance)
+
+## COMPLIANCE FLAGS - BE EXTREMELY STRICT:
+
+**Misrepresentation**: Any false product claims, incorrect specifications, misleading information
+**Price Manipulation**: Inconsistent pricing, fake discounts, artificial urgency, hidden costs
+**Pressure Tactics**: Aggressive closing, making customer uncomfortable, not accepting "no"
+**Data Security**: Verbally sharing sensitive information (cards, passwords, personal details)
+**Professional Conduct**: Off-topic discussions, inappropriate behavior, unprofessional language
+**Brand Name Inconsistency**: Calling Wakefit by wrong name or mispronouncing consistently
+
+## TOPICS - SELECT ONLY FROM THIS EXACT LIST:
+- Storage Solutions
 - Customization Options
 - Delivery & Installation
 - Warranty & Return Policy
@@ -186,221 +278,70 @@ You MUST select topics from this predefined list only. Do NOT generate random to
 - Financing Options
 - Product Care & Maintenance
 
-Select only the topics that were actually discussed in the interaction. If a topic was discussed, include it in the topics array.
+## COACHING PRIORITIES - IDENTIFY 1-3 HIGHEST IMPACT IMPROVEMENTS:
 
-LEARNING & DEVELOPMENT SUGGESTIONS FOR SALES EXECUTIVES:
-Analyze the sales executive's performance and suggest ONE specific improvement:
-- Focus on sales technique, product knowledge, or customer engagement
-- For team interactions, evaluate the overall team dynamics and individual strengths/gaps
-- Provide actionable coaching with specific examples
-- Example: "The customer expressed concern about mattress firmness at 02:30. You could have asked follow-up questions about their sleep position and firmness preferences before recommending, which would have improved solution fit."
-- Example (team): "When Ananya introduced the product at 02:15, she could have paused for Rohan to add technical details instead of covering everything, which would have demonstrated better team coordination."
-- Example: "When the customer mentioned budget constraints at 04:15, instead of pushing premium models, you could have shown value-adds in mid-range options or discussed financing options to address their concern."
-- Keep suggestion concise (2-3 sentences max)
+**Priority Areas:** Product Knowledge, Objection Handling, Active Listening, Needs Discovery, 
+Closing Technique, Empathy Building, Time Management, Follow-up Skills, Price Justification, 
+Communication Clarity, Solution Presentation, Customer Rapport
 
-COACHING PRIORITIES (Identify 1-3 specific improvement areas):
-For each coaching priority, provide:
-- **priority**: Short name (2-4 words) describing the coaching area
-  Common examples: "Product Knowledge", "Objection Handling", "Active Listening", "Needs Discovery", 
-  "Closing Technique", "Empathy Building", "Time Management", "Follow-up Skills", "Brand Alignment"
-- **score**: Current performance in this area (0-10 scale)
-  - 0-3: Critical gap, immediate coaching needed
-  - 4-6: Moderate weakness, development opportunity
-  - 7-8: Average performance, room for improvement
-  - 9-10: Strong performance, minor refinement
-- **evidence**: 1-2 sentence example from transcript showing why this area needs coaching
-  Include specific timestamp reference if possible (use format like [MM:SS] where MM and SS are digits)
-- **suggestion**: 2-3 sentence specific, actionable coaching suggestion on how to improve this area
+**For each priority:**
+- Use SPECIFIC examples with EXACT timestamps [MM:SS]
+- Provide ACTIONABLE suggestions (not generic advice)
+- Focus on highest ROI improvements
 
-Identify 1-3 most impactful coaching opportunities based on the transcript.
-If performance is excellent across all areas, you may return empty array: "coaching_priorities": []
+## EVIDENCE FORMAT - CRITICAL REQUIREMENTS:
 
-Examples:
-{
-  "priority": "Objection Handling",
-  "score": 4,
-  "evidence": "At [04:15], customer raised price concern but executive only offered discount without explaining value proposition",
-  "suggestion": "When a customer raises a price objection, first validate their concern by saying something like 'I understand budget is important'. Then reframe the value: 'This mattress includes a 5-year warranty and free delivery, which adds another 15,000 in value'. This helps the customer see the total value before making a decision."
-}
-{
-  "priority": "Product Knowledge", 
-  "score": 5,
-  "evidence": "Executive couldn't answer specific question about mattress foam density at [02:30], causing customer doubt",
-  "suggestion": "Before your next shift, review the foam density specifications for our top 5 mattress models. Practice a 1-minute explanation of why foam density matters for sleep quality. This will boost customer confidence when technical questions arise."
-}
+**For interaction_matrices evidence:**
+- State ONLY what happened (factual observations)
+- Include timestamps [MM:SS] when available
+- NO editorializing, NO coaching language, NO opinions
+- Maximum 2 sentences
+- Reference specific quotes or actions
 
-EVIDENCE FORMAT FOR INTERACTION MATRICES:
-For each score (communication, discovery, solution_fit, sales_execution, customer_experience), provide concise evidence:
-- State what happened (factual observation)
-- Do NOT explain why it's good/bad
-- Do NOT provide coaching (save that for learning_suggestions)
-- Keep to 1-2 sentences MAX
-- Reference specific timestamps or direct quotes if possible
+**GOOD Examples:**
+- "Executive asked about sleep position and budget at [02:15] before making recommendations"
+- "Customer objected to price at [04:45]; executive immediately offered financing options"  
+- "Multiple hesitations and unclear explanations throughout conversation"
+- "Customer expressed frustration at [06:30] when executive couldn't answer density question"
 
-Examples of GOOD evidence:
-✓ "Sales executive asked about sleep position and preferences at 02:15 before recommending"
-✓ "Multiple grammatical errors and hesitations throughout; unclear communication at 01:30"
-✓ "Customer objected about price at 04:45; executive offered financing option immediately"
-✓ "Customer left without making decision; no next steps defined"
+**BAD Examples:**
+- "Executive demonstrated excellent discovery skills"
+- "Poor sales technique led to customer dissatisfaction"  
+- "Good objection handling throughout"
+- "Executive needs to improve communication"
 
-Examples of BAD evidence:
-✗ "The sales executive demonstrated excellent communication skills by clearly articulating product features"
-✗ "Poor sales technique resulted in customer dissatisfaction"
-✗ "Executive did well with objection handling"- Only suggest improvements, not praise
+## COMPETITOR INTELLIGENCE - DIRECT BRANDS ONLY:
 
-COMPETITOR INTELLIGENCE EXTRACTION FOR RETAIL:
+**INCLUDE (Track these direct competitors):**
+- Sleepwell, Kurlon, Duroflex, Pepperfry, Urban Ladder, IKEA
+- Godrej Interio, Nilkamal, @home, Hometown, FabIndia  
+- Casper, Emma, Sunday, SleepyCat, The Sleep Company
+- Any furniture/mattress brand with physical stores
 
-**IMPORTANT: Only extract DIRECT BRAND COMPETITORS - NOT marketplaces or online platforms**
+**EXCLUDE (Do NOT track):**
+- Amazon, Flipkart, Myntra, Snapdeal, Meesho, eBay (marketplaces)
+- Payment platforms, delivery services, logistics companies
+- Generic online shopping mentions
 
-INCLUDE (Direct Furniture/Mattress Brand Competitors):
-✓ Sleepwell, Kurlon, Duroflex, Pepperfry, Urban Ladder, IKEA
-✓ Godrej Interio, Nilkamal, @home, Hometown, FabIndia
-✓ Casper, Emma, Sunday, SleepyCat, The Sleep Company
-✓ Any other furniture/mattress brand stores mentioned by customer
+If NO direct brand competitors mentioned → return empty array []
 
-EXCLUDE (Do NOT track these as competitors):
-✗ Amazon, Flipkart, Myntra, Snapdeal, Meesho, eBay
-✗ Any e-commerce marketplace or online shopping platform
-✗ Payment platforms, delivery services, logistics companies
+## TIMESTAMP ACCURACY - MANDATORY:
 
-EXTRACTION RULES:
-When customer mentions a DIRECT BRAND COMPETITOR (from INCLUDE list above):
-- Extract competitor company/brand name exactly as stated
-- Extract specific product/feature mentioned (e.g., "memory foam", "ergonomic design", "durability", "price point")
-- Classify comparison type: cheaper, better_feature, quality, service, delivery, warranty, other
-- Classify customer sentiment:
-  - appreciation: customer praised competitor's product/service
-  - complaint: customer dissatisfied with competitor
-  - query: customer asking questions about competitor vs. Wakefit
-  - suggestion: customer suggesting Wakefit adopt competitor's approach
-  - neutral: factual comparison without emotion
-- Include exact details from customer's statement
+- Use EXACT timestamps from transcript: [MM:SS] format
+- NEVER approximate, estimate, or guess timestamps
+- For compliance flags: timestamp when violation first occurred
+- For evidence: timestamp when specific behavior happened
+- If no timestamp visible, state the facts without timestamp
 
-If customer ONLY mentions marketplaces (Amazon, Flipkart, etc.) or NO competitors at all:
-- Return empty array: "competitor_intelligence": []
+## CRITICAL FINAL REQUIREMENTS:
 
-Examples:
-- Customer: "I saw this on Amazon" → competitor_intelligence = [] (marketplace, not competitor)
-- Customer: "Sleepwell has better pricing" → competitor_intelligence = [{"competitor_name": "Sleepwell", ...}] (direct competitor)
-- Customer: "Flipkart delivery is fast" → competitor_intelligence = [] (marketplace service, not product competitor)
+1. Return ONLY valid JSON (no markdown code fences)
+2. All timestamps must be EXACT from transcript
+3. Evidence must be factual observations only
+4. Scoring must follow the precise 0-10 rubrics above
+5. Be ruthlessly objective and evidence-based
 
-⏰ TIMESTAMP ACCURACY FOR COMPLIANCE FLAGS:
-When identifying compliance violations, you MUST reference the EXACT [MM:SS] timestamps shown in the transcript:
-- Find the exact moment the violation occurred
-- Use the timestamp format shown in the transcript (e.g., [05:30])
-- If a violation spans multiple statements, use the timestamp when it first occurred
-- NEVER approximate or guess timestamps - match them exactly as shown in the conversation
-- Include this timestamp in the "timestamp" field of each compliance_flag
-
-Example:
-If transcript shows: "[05:30] Sales Executive: 'This mattress is all rubber wood'..."
-And customer later says: "[06:15] Customer: Wait, I thought it was solid wood"
-The violation timestamp should be [05:30] (when the misleading statement was made)
-
-PRODUCTS DISCUSSED:
-- If multiple products are discussed, create separate entries for each product
-- Track customer interest and objections per product
-- Record final outcome (purchased, interested, not interested, deferred decision)
-
-SALES EXECUTIVE EVALUATION MATRIX (Scoring 0-10 for each):
-
-**Communication** (Clarity, tone, listening, professionalism):
-- 8-10: Clear articulation, professional tone, listens actively, asks clarifying questions
-- 5-7: Generally clear, mostly professional, listens adequately
-- 2-4: Unclear communication, occasional unprofessional moments, poor listening
-- 0-1: Unintelligible, very unprofessional, dismissive of customer
-
-**Discovery** (Understanding customer needs and asking right questions):
-- 8-10: Asks targeted questions, identifies pain points, understands budget/preferences
-- 5-7: Asks some questions, gets basic understanding
-- 2-4: Minimal questioning, misses key requirements
-- 0-1: No questioning, ignores customer needs
-
-**Solution Fit** (How well product recommendations matched customer needs):
-- 8-10: Recommendations perfectly match requirements, explains relevant benefits
-- 5-7: Recommendations mostly appropriate, some benefit explanation
-- 2-4: Poor recommendations, weak benefit explanation
-- 0-1: Completely irrelevant recommendations
-
-**Sales Execution** (Handling objections, closing, next steps):
-- 8-10: Addresses all concerns, asks for sale, defines clear next steps
-- 5-7: Addresses some objections, may or may not close
-- 2-4: Struggles with objections, weak closing
-- 0-1: Fails to address objections, no attempt to close
-
-**Customer Experience** (Overall impression - respect, value, satisfaction):
-- 8-10: Customer feels valued, respected, satisfied with experience
-- 5-7: Neutral experience, customer satisfied with basics
-- 2-4: Customer feels undervalued, somewhat dissatisfied
-- 0-1: Customer feels disrespected, very dissatisfied
-
-SCORING GUIDELINES (0-10 scale for overall metrics):
-
-**customer_satisfaction**: Rate how satisfied the customer appears
-- 8-10: Customer very happy with service, made purchase or strong intent
-- 5-7: Customer neutral, still deciding, no strong signals
-- 2-4: Customer expresses concerns, doubts, or dissatisfaction
-- 0-1: Customer very unhappy, leaves dissatisfied
-
-SLA COMPLIANCE FOR IN-STORE SALES (GRADUATED scoring: 0%, 25%, 50%, 75%, 100%)
-
-DEFINITION: SLA Compliance measures adherence to Wakefit's in-store sales standards - the predefined
-performance standards and customer service commitments.
-
-SCORING FRAMEWORK (Graduated - Per Interaction Basis):
-
-An interaction receives a graduated compliance score based on how many criteria are met:
-
-COMPLIANCE CRITERIA (Check all 3):
-
-1. GREETING & ENGAGEMENT (Threshold)
-   - Standard: Sales executive must greet customer within first 30 seconds of interaction
-   - Measurement: Check if greeting/acknowledgment appears in first messages
-   - Status: YES if proper greeting within 30 sec, NO if no greeting or delayed
-   - Evidence: Look at first sales executive message for greeting
-
-2. NEEDS DISCOVERY (Threshold)
-   - Standard: Sales executive must ask discovery questions before recommending products
-   - Measurement: Does executive ask about needs, preferences, budget before pitching?
-   - Status: YES if asks questions, NO if immediately pushes products without discovery
-   - Evidence: Check if executive asks questions like "What are you looking for?", "What's your budget?", etc.
-
-3. PRODUCT KNOWLEDGE & ACCURACY (Threshold)
-   - Standard: All product information provided must be accurate (no false claims)
-   - Measurement: Check if any misinformation, false promises, or inaccurate specs mentioned
-   - Status: YES if all information accurate, NO if any false/misleading claims
-   - Evidence: Look for compliance_flags with "Misrepresentation" category
-
-SCORING LOGIC (Graduated Based on Criteria Met):
-- If 0 criteria met → sla_compliance = 0 (no compliance)
-- If 1 criterion met → sla_compliance = 25 (minimal compliance)
-- If 2 criteria met → sla_compliance = 50 (partial compliance)
-- If 3 criteria met → sla_compliance = 75 (substantial compliance)
-- If all 3 criteria met PLUS excellent customer experience → sla_compliance = 100 (full compliance)
-
-RATIONALE: Graduated scoring recognizes that partial adherence is better than none,
-allowing for realistic retail metrics where perfect compliance is rare.
-
-Example Calculation:
-- Interaction A: Greeting ✅, Discovery ✅, Accurate info ✅ → 3/3 criteria → 75-100%
-- Interaction B: No greeting ❌, Discovery ✅, Accurate info ✅ → 2/3 criteria → 50%
-
-OVERALL SENTIMENT & SALES EXECUTIVE PERFORMANCE CALCULATION:
-Do NOT include "overall_sentiment" or "sales_executive_performance" in the response. 
-These will be automatically calculated as:
-- sales_executive_performance = average of 5 SALES EXECUTIVE EVALUATION MATRIX scores (communication, discovery, solution_fit, sales_execution, customer_experience)
-- overall_sentiment = (customer_satisfaction + sales_executive_performance) / 2
-
-SCORING GUIDELINES (0-10 scale for overall metrics):
-
-**customer_satisfaction**: Rate how satisfied the customer appears
-- 8-10: Customer very happy with service, made purchase or strong intent
-- 5-7: Customer neutral, still deciding, no strong signals
-- 2-4: Customer expresses concerns, doubts, or dissatisfaction
-- 0-1: Customer very unhappy, leaves dissatisfied
-
-    
-Base all ratings strictly on evidence from the transcript provided."""
+Base ALL analysis strictly on transcript evidence."""
 
 
 def analyze_instore_interaction(messages, interaction_id=None):

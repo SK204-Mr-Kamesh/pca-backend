@@ -390,11 +390,23 @@ def get_interaction(interaction_id):
         def to_ist(dt):
             if not dt:
                 return None
+            # If naive datetime, assume UTC
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
+            # Convert to IST (UTC + 5:30)
             ist_offset = timedelta(hours=5, minutes=30)
             ist_dt = dt.astimezone(timezone.utc) + ist_offset
-            return ist_dt.strftime("%d/%m/%Y, %H:%M:%S")
+            return ist_dt.strftime("%d/%m/%Y, %I:%M:%S %p")
+        
+        # Convert to ISO 8601 format (for uploadedAt)
+        def to_iso(dt):
+            if not dt:
+                return None
+            # If naive datetime, assume UTC
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            # Return ISO 8601 format with timezone
+            return dt.isoformat()
         
         audio_size_mb = None
         if record.audio_size:
@@ -406,7 +418,7 @@ def get_interaction(interaction_id):
             'storeId': record.store_id,
             'salesExecutiveId': record.sales_executive_id,
             'uploadedFile': record.uploaded_filename or '—',
-            'uploadedAt': to_ist(record.created_on),
+            'uploadedAt': to_iso(record.created_on),  # ISO 8601 format
             'audioSize': audio_size_mb,
             'notes': record.notes or '',
             'language': record.language or '—',

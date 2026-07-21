@@ -69,6 +69,10 @@ def get_instore_analytics():
         sales_executive_details = {}  # For coaching priorities
         coaching_priorities_all = []  # Collect all coaching priorities
         
+        # Conversion rate tracking
+        total_products_discussed_overall = 0
+        total_products_sold_overall = 0
+        
         for interaction_id, analytics in analytics_map.items():
             # Find corresponding record for sales_executive_id
             record = records_map.get(interaction_id)
@@ -118,6 +122,31 @@ def get_instore_analytics():
                     for product in products:
                         if isinstance(product, dict) and 'product_name' in product:
                             topics_list.append(product.get('product_name'))
+                
+                # Conversion rate metrics from interaction_matrices
+                interaction_matrices = analytics.raw_model_response.get('interaction_matrices', {})
+                if interaction_matrices and isinstance(interaction_matrices, dict):
+                    products_discussed = interaction_matrices.get('total_products_discussed', 0)
+                    products_sold = interaction_matrices.get('products_sold', 0)
+                    
+                    # Add to overall totals
+                    total_products_discussed_overall += products_discussed
+                    total_products_sold_overall += products_sold
+                    
+                    # Track per sales executive
+                    if sales_executive_id not in sales_executive_scores:
+                        sales_executive_scores[sales_executive_id] = {
+                            'interactions': 0,
+                            'performance_scores': [],
+                            'satisfaction_scores': [],
+                            'sentiment_scores': [],
+                            'sales_outcomes': [],
+                            'total_products_discussed': 0,
+                            'total_products_sold': 0
+                        }
+                    
+                    sales_executive_scores[sales_executive_id]['total_products_discussed'] += products_discussed
+                    sales_executive_scores[sales_executive_id]['total_products_sold'] += products_sold
                 
                 # SLA compliance
                 sla_compliance = analytics.raw_model_response.get('sla_compliance')
@@ -209,6 +238,10 @@ def get_instore_analytics():
         # AI Quality Scorecard (5 metrics per sales executive)
         quality_scorecard = _get_quality_scorecard(analytics_map, records_map)
         
+        # Calculate overall conversion rate
+        overall_conversion_rate_percentage = (total_products_sold_overall / total_products_discussed_overall * 100) if total_products_discussed_overall > 0 else 0.0
+        overall_conversion_rate_count = f"{total_products_sold_overall}/{total_products_discussed_overall}"
+        
         return {
             'total_uploads': total_uploads,
             'ready': ready,
@@ -218,6 +251,10 @@ def get_instore_analytics():
             'average_customer_satisfaction': _round_float(average_customer_satisfaction),
             'average_sales_executive_performance': _round_float(average_sales_executive_performance),
             'average_sla_compliance': _round_float(average_sla_compliance),
+            'overall_conversion_rate_percentage': _round_float(overall_conversion_rate_percentage),
+            'overall_conversion_rate_count': overall_conversion_rate_count,
+            'total_products_discussed': total_products_discussed_overall,
+            'total_products_sold': total_products_sold_overall,
             'upload_volume': upload_volume,
             'sentiment_distribution': {
                 'positive': _round_float(sentiment_distribution['positive']),
@@ -231,7 +268,7 @@ def get_instore_analytics():
                 'score': _round_float(exec['score']),
                 'csat': _round_float(exec['csat']),
                 'sla_compliance': _round_float(exec['sla_compliance']),
-                'conversion_rate': _round_float(exec['conversion_rate']),
+                'conversion_rate_percentage': _round_float(exec['conversion_rate_percentage']),
                 'sentiment': _round_float(exec['sentiment'])
             } for exec in leaderboard],
             'executive_summary': executive_summary,
@@ -370,7 +407,7 @@ def _get_top_topics(topics_list):
 
 
 def _get_sales_executive_leaderboard(sales_executive_scores):
-    """Build sales executive effectiveness leaderboard"""
+    """Build sales executive effectiveness leaderboard with conversion metrics"""
     leaderboard = []
     
     for exec_id, scores in sales_executive_scores.items():
@@ -379,10 +416,11 @@ def _get_sales_executive_leaderboard(sales_executive_scores):
         avg_sentiment = sum(scores['sentiment_scores']) / len(scores['sentiment_scores']) if scores['sentiment_scores'] else 0.0
         avg_sla = sum(scores.get('sla_scores', [])) / len(scores.get('sla_scores', [1])) if scores.get('sla_scores') else 0.0
         
-        # Calculate conversion rate (successful sales outcomes)
-        successful_outcomes = sum(1 for outcome in scores['sales_outcomes'] if outcome in ['successful', 'purchased'])
-        total_interactions = scores['interactions']
-        conversion_rate = (successful_outcomes / total_interactions) * 100 if total_interactions > 0 else 0.0
+        # Calculate conversion rate from products (more accurate)
+        total_products_discussed = scores.get('total_products_discussed', 0)
+        total_products_sold = scores.get('total_products_sold', 0)
+        conversion_rate_percentage = (total_products_sold / total_products_discussed * 100) if total_products_discussed > 0 else 0.0
+        conversion_rate_count = f"{total_products_sold}/{total_products_discussed}"
         
         leaderboard.append({
             'sales_executive_id': exec_id,
@@ -390,7 +428,10 @@ def _get_sales_executive_leaderboard(sales_executive_scores):
             'score': _round_float(avg_score),
             'csat': _round_float(avg_csat),
             'sla_compliance': _round_float(avg_sla),
-            'conversion_rate': _round_float(conversion_rate),
+            'conversion_rate_percentage': _round_float(conversion_rate_percentage),
+            'conversion_rate_count': conversion_rate_count,
+            'products_discussed': total_products_discussed,
+            'products_sold': total_products_sold,
             'sentiment': _round_float(avg_sentiment)
         })
     

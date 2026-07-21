@@ -36,48 +36,62 @@ def _detect_speakers_with_llm(raw_transcript, interaction_type='pca'):
     """Use LLM to detect speaker roles in transcript with high precision"""
     
     if interaction_type == 'instore':
-        speaker_detection_prompt = """You are an EXPERT at analyzing in-store sales transcripts. Your ONLY job is to identify WHO IS THE CUSTOMER and WHO IS THE SALES EXECUTIVE.
+        speaker_detection_prompt = """You are an EXPERT at analyzing in-store sales transcripts. Your ONLY job is to identify WHO IS WHO in the conversation.
 
-**CRITICAL ACCURACY REQUIREMENT**: You MUST get this correct. Read the ENTIRE transcript word by word.
+**CRITICAL ACCURACY REQUIREMENT**: You MUST get this 100 percentage correct. Read the ENTIRE transcript multiple times.
 
 **THE FUNDAMENTAL RULE**:
-- CUSTOMER = person who WANTS TO BUY, asks prices, makes decisions about purchasing
-- SALES EXECUTIVE = person who SELLS, explains products, gives prices, closes deals
+- CUSTOMER = person who WANTS TO BUY something, asks about prices, makes purchase decisions
+- SALES EXECUTIVE = person who WORKS at the store, explains products, provides prices, processes orders
 
-**CUSTOMER speaks like this** (they are BUYING):
-- "kitna paisa hai?" / "price kya hai?" / "kitne ka?" (asking price)
-- "mujhe chahiye" / "mein le lunga" / "theek hai" (making decision)
-- "budget mera X hai" / "afford kar sakta hoon?" (discussing budget)
-- "solid wood hai?" / "warranty kitni hai?" (asking about product)
-- Shows hesitation: "sochta hoon", "dekh leta hoon"
-- They ASK QUESTIONS more than give answers
+**HOW TO IDENTIFY CUSTOMERS** (they are BUYING):
+They will say things like:
+- "kitna paisa hai?" "price kya hai?" "how much?" (asking price)
+- "mujhe chahiye" "main le lunga" "I want to buy" (expressing purchase intent)
+- "budget mera X hai" (discussing their budget)
+- "dikhao" "show me" (asking to see products)
+- "theek hai" "ok main le leta hoon" (making decisions)
+- They ASK MORE than they ANSWER
+- They show uncertainty: "sochta hoon", "confirm kar dete hain"
 
-**SALES EXECUTIVE speaks like this** (they are SELLING):
-- "ye mattress hai" / "fabric acha hai" / "10 year warranty" (explaining product)
-- "aap kya chahte ho?" / "budget kya hai?" (asking discovery questions)
-- "price itna hai" / "discount de dunga" / "sirf X rupees" (giving prices)
-- "sir", "madam", "aapko" (addressing customer respectfully)
-- Gives PRODUCT DETAILS and technical specifications
-- They ANSWER QUESTIONS more than ask them
+**HOW TO IDENTIFY SALES EXECUTIVES** (they are SELLING):
+They will say things like:
+- "ye mattress hai" "ye model hai" (introducing/explaining products)
+- "price itna hai" "discount milega" (giving prices and offers)
+- "sir" "madam" repeatedly (addressing customers respectfully)
+- "aap kya dekhna chahte ho?" (asking what customer wants)
+- "delivery 10 din mein hogi" (explaining logistics)
+- "warranty 12 saal ki hai" (explaining product features)
+- They ANSWER MORE than they ASK
+- They show product knowledge and authority
 
-**YOUR TASK**:
-1. Read EVERY line of the transcript
-2. For EACH speaker, note: Are they asking prices OR giving prices? Asking questions OR answering?
-3. The person ASKING PRICES = Customer
-4. The person GIVING PRICES and PRODUCT INFO = Sales Executive
+**CRITICAL ANALYSIS STEPS**:
+1. Read the ENTIRE transcript word by word
+2. For EACH speaker, list what they say and count:
+   - How many times they ask prices vs give prices
+   - How many times they ask questions vs answer questions
+   - Do they use respectful terms (sir/madam) or are they addressed with respect?
+   - Do they explain products or ask about products?
+3. The person asking prices and making decisions = CUSTOMER
+4. The person giving prices and explaining products = SALES EXECUTIVE
 
-**RESPONSE FORMAT** (ONLY JSON, NO MARKDOWN):
+**RESPONSE FORMAT** (ONLY JSON, NO MARKDOWN, NO EXPLANATIONS):
 {
   "speakers": {
-    "speaker_0": "customer",
-    "speaker_1": "sales_executive"
+    "speaker_0": "customer|sales_executive|manager|staff|other",
+    "speaker_1": "customer|sales_executive|manager|staff|other",
+    "speaker_2": "customer|sales_executive|manager|staff|other"
   },
-  "primary_sales_executive": "speaker_1",
-  "analysis": "speaker_0 asks 'kitna paisa' and 'le lunga' = customer buying behavior. speaker_1 says 'ye mattress' and 'price itna hai' = sales executive selling behavior.",
-  "confidence": "high"
+  "primary_sales_executive": "speaker_X",
+  "analysis": "speaker_0 asks 'kitna paisa hai' at 5 places, says 'mujhe chahiye', negotiates price = CUSTOMER. speaker_1 says 'ye mattress Rs 20,000', 'sir aapko', explains warranty = SALES EXECUTIVE.",
+  "confidence": "high|medium|low"
 }
 
-**CRITICAL**: Return ONLY the JSON object. NO markdown backticks, NO explanations outside JSON."""
+**CRITICAL**: 
+- Return ONLY the JSON object
+- NO markdown backticks (```), NO "```json"
+- NO explanations outside the JSON
+- Use EXACT evidence from transcript in analysis field"""
     else:
         speaker_detection_prompt = """You are an expert at analyzing call transcripts with PERFECT ACCURACY required.
 
@@ -362,7 +376,8 @@ def transcribe_audio(s3_key, language_code='en-US', interaction_type='pca'):
         model_id="scribe_v2",
         tag_audio_events=True,
         language_code=elevenlabs_lang,
-        diarize=True
+        diarize=True,
+        diarization_threshold='0.15'
     )
     
     # Parse ElevenLabs response into messages
