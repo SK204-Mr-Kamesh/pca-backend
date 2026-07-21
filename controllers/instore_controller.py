@@ -315,9 +315,44 @@ def get_interaction(interaction_id):
         
         # Format transcript for frontend
         transcript = []
+        # Track unique customers and sales executives by speaker_id for numbering
+        customer_map = {}
+        customer_counter = 0
+        sales_exec_map = {}
+        sales_exec_counter = 0
+        
         for msg in transcript_messages:
             role = msg.get('role')
-            speaker_type = 'user' if role == 'user' else 'agent'
+            speaker_id = msg.get('speaker_id', '')
+            
+            # Map role to display name and type
+            if role in ['user', 'customer']:
+                speaker_type = 'user'
+                # Assign customer number based on speaker_id
+                if speaker_id not in customer_map:
+                    customer_counter += 1
+                    customer_map[speaker_id] = customer_counter
+                customer_num = customer_map[speaker_id]
+                speaker_label = f"Customer {customer_num}" if customer_counter > 1 else "Customer"
+                
+            elif role in ['agent', 'sales_executive']:
+                speaker_type = 'agent'
+                # Assign sales executive number based on speaker_id
+                if speaker_id not in sales_exec_map:
+                    sales_exec_counter += 1
+                    sales_exec_map[speaker_id] = sales_exec_counter
+                exec_num = sales_exec_map[speaker_id]
+                speaker_label = f"Sales Executive {exec_num}" if sales_exec_counter > 1 else "Sales Executive"
+                
+            elif role in ['manager', 'supervisor']:
+                speaker_label = "Store Manager"
+                speaker_type = 'agent'
+            elif role in ['staff', 'other_staff']:
+                speaker_label = "Staff Member"
+                speaker_type = 'agent'
+            else:
+                speaker_label = "Other"
+                speaker_type = 'agent'
             
             if 'timestamp' in msg and isinstance(msg['timestamp'], str) and ':' in msg['timestamp']:
                 stamp = msg['timestamp']
@@ -330,7 +365,7 @@ def get_interaction(interaction_id):
                 stamp = "00:00"
             
             transcript.append({
-                "speaker": "Customer" if speaker_type == "user" else "Sales Executive",
+                "speaker": speaker_label,
                 "timestamp": stamp,
                 "content": msg.get("text", ""),
                 "type": speaker_type

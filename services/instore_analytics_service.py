@@ -111,11 +111,13 @@ def get_instore_analytics():
                 except (TypeError, ValueError):
                     pass
             
-            # Topics
+            # Products discussed
             if analytics.raw_model_response and isinstance(analytics.raw_model_response, dict):
-                topics = analytics.raw_model_response.get('topics', [])
-                if topics:
-                    topics_list.extend(topics)
+                products = analytics.raw_model_response.get('products_discussed', [])
+                if products and isinstance(products, list):
+                    for product in products:
+                        if isinstance(product, dict) and 'product_name' in product:
+                            topics_list.append(product.get('product_name'))
                 
                 # SLA compliance
                 sla_compliance = analytics.raw_model_response.get('sla_compliance')
@@ -185,8 +187,8 @@ def get_instore_analytics():
         # Language distribution
         language_distribution = _get_language_distribution(languages)
         
-        # Top topics
-        top_topics = _get_top_topics(topics_list)
+        # Top products discussed
+        top_products = _get_top_topics(topics_list)
         
         # Sales executive effectiveness leaderboard
         leaderboard = _get_sales_executive_leaderboard(sales_executive_scores)
@@ -223,7 +225,7 @@ def get_instore_analytics():
                 'negative': _round_float(sentiment_distribution['negative'])
             },
             'language_distribution': {lang: _round_float(pct) for lang, pct in language_distribution.items()},
-            'top_topics': top_topics,
+            'top_products': top_products,
             'sales_executive_leaderboard': [{
                 **exec,
                 'score': _round_float(exec['score']),
@@ -352,15 +354,18 @@ def _get_language_distribution(languages):
 
 
 def _get_top_topics(topics_list):
-    """Get top 5 most common topics"""
+    """Get top 5 most discussed products"""
     if not topics_list:
         return []
     
     topic_counts = Counter(topics_list)
     
     return [
-        {'topic': topic, 'count': count}
-        for topic, count in topic_counts.most_common(5)
+        {
+            'product': product,
+            'count': count,
+        }
+        for product, count in topic_counts.most_common(5)
     ]
 
 

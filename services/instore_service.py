@@ -22,19 +22,68 @@ def _get_bedrock_client():
 
 
 def format_transcript_for_instore(messages):
-    """Format messages for in-store analysis"""
+    """Format messages for in-store analysis with precise timestamps and participant tracking"""
     if not messages:
         return "(No conversation)"
     lines = []
     for msg in messages:
-        role = "Customer" if msg.get("role") == "user" else "Sales Executive"
-        lines.append(f"{role}: {msg.get('text', '')}")
+        # Determine participant role
+        role = msg.get("speaker_role") or msg.get("role")  # Use explicit speaker_role if available
+        speaker_id = msg.get("speaker_id", "")
+        
+        # Map role to participant type
+        if role == "user" or role == "customer":
+            participant = "Customer"
+        elif role == "agent" or role == "sales_executive":
+            participant = "Sales Executive"
+        elif role == "manager" or role == "supervisor":
+            participant = "Store Manager"
+        elif role == "staff" or role == "other_staff":
+            participant = "Staff Member"
+        else:
+            # Fallback based on speaker_id pattern if provided
+            if speaker_id and "cust" in speaker_id.lower():
+                participant = "Customer"
+            else:
+                participant = "Sales Executive"
+        
+        # Add speaker_id for multi-exec scenarios (e.g., "Sales Executive (Ananya)")
+        if speaker_id and participant != "Customer":
+            participant = f"{participant} ({speaker_id})"
+        
+        # Include timestamp for accurate coaching suggestions and compliance flags
+        timestamp = "00:00"
+        if 'timestamp' in msg and isinstance(msg['timestamp'], str) and ':' in msg['timestamp']:
+            timestamp = msg['timestamp']
+        elif 'start_time' in msg:
+            # Calculate from start_time in seconds
+            start_seconds = float(msg['start_time'])
+            minutes = int(start_seconds // 60)
+            seconds = int(start_seconds % 60)
+            timestamp = f"{minutes:02d}:{seconds:02d}"
+        
+        lines.append(f"[{timestamp}] {participant}: {msg.get('text', '')}")
     return "\n".join(lines)
 
 
 _INSTORE_ANALYSIS_PROMPT = """You are an in-store interaction quality analyst for Wakefit retail stores.
-You receive a transcript of a sales interaction between a Sales Executive and a Customer in a physical store.
+You receive a transcript of a sales interaction in a physical store. The interaction may involve:
+- A Customer (role: "Customer")
+- One or more Sales Executives (role: "Sales Executive (Name)")
+- Store Manager or Supervisor (role: "Store Manager")
+- Other staff members (role: "Staff Member")
+
+When multiple sales executives are involved, evaluate them as a team and note individual contributions.
+Focus primarily on the customer's experience with the Wakefit team overall.
+
 Analyze it and respond with ONLY a single valid JSON object — no prose, no markdown fences.
+
+🚨 CRITICAL: TIMESTAMP ACCURACY REQUIREMENT 🚨
+The transcript includes timestamps in [MM:SS] format. When referencing any timestamps in your analysis:
+- Use ONLY the EXACT timestamps shown in the transcript
+- DO NOT guess, approximate, or create new timestamps
+- Format all timestamp references as [MM:SS] exactly as shown in transcript
+- This applies to: key_indicators, learning_suggestions, compliance_flags, coaching_priorities
 
 The JSON must have exactly these keys:
 {
@@ -107,17 +156,11 @@ The JSON must have exactly these keys:
   },
   "compliance_flags": [
     {
-      "category": "<Misrepresentation|Pressure Tactics|Privacy Violations|Discrimination|Safety Issues|Price Manipulation|Data Security|Professional Conduct|Brand Name Inconsistency>",
+      "flag": "<Misrepresentation|Pressure Tactics|Privacy Violations|Discrimination|Safety Issues|Price Manipulation|Data Security|Professional Conduct|Brand Name Inconsistency>",
       "severity": "<critical|high|medium|low>",
       "description": "<what policy or standard was violated>",
       "evidence": "<exact quote from transcript showing the violation>",
-      "timestamp": "<precise time in [MM:SS] format or null if uncertain>"
-    }
-  ],
-      "severity": "<critical|high|medium|low>",
-      "description": "<what policy or standard was violated>",
-      "evidence": "<exact quote from transcript showing the violation>",
-      "timestamp": "<approximate time when it occurred, e.g., [02:30]>"
+      "timestamp": "<precise time in [MM:SS] format - MUST match timestamp from transcript>"
     }
   ],
   "sla_compliance": <percentage 0-100>
@@ -148,8 +191,10 @@ Select only the topics that were actually discussed in the interaction. If a top
 LEARNING & DEVELOPMENT SUGGESTIONS FOR SALES EXECUTIVES:
 Analyze the sales executive's performance and suggest ONE specific improvement:
 - Focus on sales technique, product knowledge, or customer engagement
+- For team interactions, evaluate the overall team dynamics and individual strengths/gaps
 - Provide actionable coaching with specific examples
 - Example: "The customer expressed concern about mattress firmness at 02:30. You could have asked follow-up questions about their sleep position and firmness preferences before recommending, which would have improved solution fit."
+- Example (team): "When Ananya introduced the product at 02:15, she could have paused for Rohan to add technical details instead of covering everything, which would have demonstrated better team coordination."
 - Example: "When the customer mentioned budget constraints at 04:15, instead of pushing premium models, you could have shown value-adds in mid-range options or discussed financing options to address their concern."
 - Keep suggestion concise (2-3 sentences max)
 
@@ -238,6 +283,19 @@ Examples:
 - Customer: "I saw this on Amazon" → competitor_intelligence = [] (marketplace, not competitor)
 - Customer: "Sleepwell has better pricing" → competitor_intelligence = [{"competitor_name": "Sleepwell", ...}] (direct competitor)
 - Customer: "Flipkart delivery is fast" → competitor_intelligence = [] (marketplace service, not product competitor)
+
+⏰ TIMESTAMP ACCURACY FOR COMPLIANCE FLAGS:
+When identifying compliance violations, you MUST reference the EXACT [MM:SS] timestamps shown in the transcript:
+- Find the exact moment the violation occurred
+- Use the timestamp format shown in the transcript (e.g., [05:30])
+- If a violation spans multiple statements, use the timestamp when it first occurred
+- NEVER approximate or guess timestamps - match them exactly as shown in the conversation
+- Include this timestamp in the "timestamp" field of each compliance_flag
+
+Example:
+If transcript shows: "[05:30] Sales Executive: 'This mattress is all rubber wood'..."
+And customer later says: "[06:15] Customer: Wait, I thought it was solid wood"
+The violation timestamp should be [05:30] (when the misleading statement was made)
 
 PRODUCTS DISCUSSED:
 - If multiple products are discussed, create separate entries for each product
@@ -341,52 +399,7 @@ SCORING GUIDELINES (0-10 scale for overall metrics):
 - 2-4: Customer expresses concerns, doubts, or dissatisfaction
 - 0-1: Customer very unhappy, leaves dissatisfied
 
-COMPLIANCE & RISK FLAGS:
-Check for violations of sales policies and ethical standards. Use these EXACT category names:
-- **Misrepresentation**: False claims about products, features, or benefits
-- **Pressure Tactics**: Aggressive selling, rushing customer, creating false urgency
-- **Privacy Violations**: Improper handling of customer personal information
-- **Discrimination**: Biased treatment based on protected characteristics
-- **Safety Issues**: Ignoring safety concerns or product warnings
-- **Price Manipulation**: Unauthorized discounts or misleading pricing
-- **Data Security**: Insecure handling of payment information
-- **Professional Conduct**: Rudeness, inappropriate language, disrespect
-- **Brand Name Inconsistency**: Using wrong company name or inconsistent branding
-
-For each flag, return exactly these fields in this exact order:
-- **category**: ONE of the exact categories listed above (FIRST field)
-- **severity**: critical | high | medium | low
-  - critical: immediate escalation needed
-  - high: management review required
-  - medium: coaching needed
-  - low: minor note
-- **description**: Brief explanation of what policy/standard was violated
-- **evidence**: Exact quote from transcript showing the violation
-- **timestamp**: IMPORTANT - Use precise timestamp ONLY if clearly available from the transcript.
-  Format: [MM:SS] where MM is minutes (00-59) and SS is seconds (00-59).
-  NEVER hallucinate or estimate timestamps. If timestamp cannot be determined from transcript, use null.
-
-If NO compliance issues found, return empty array: "compliance_flags": []
-
-Example of CORRECT compliance flag structure:
-{
-  "category": "Brand Name Inconsistency",
-  "severity": "medium",
-  "description": "Sales executive used incorrect company name during closing",
-  "evidence": "thank you so much for choosing Great Fit",
-  "timestamp": "[10:11]"
-}
-
-Example when timestamp is uncertain:
-{
-  "category": "Professional Conduct",
-  "severity": "low",
-  "description": "Slightly dismissive tone when customer asked about warranty",
-  "evidence": "Yeah, it's like any other warranty, doesn't really matter much",
-  "timestamp": null
-}
-
-Be realistic with scores. Typical interaction should score 6-8, not perfect 10s.
+    
 Base all ratings strictly on evidence from the transcript provided."""
 
 
@@ -410,11 +423,34 @@ def analyze_instore_interaction(messages, interaction_id=None):
                 "role": "user",
                 "content": [{"text": f"In-store interaction transcript:\n\n{conversation_text}"}]
             }],
-            inferenceConfig={"maxTokens": 4096} 
+            inferenceConfig={"maxTokens": 4096, "temperature": 0.3}  # Lower temperature for more consistent JSON
         )
         
         text = response["output"]["message"]["content"][0]["text"].strip()
         parsed = _parse_json(text)
+        
+        # If parsing failed, return empty dict
+        if not parsed:
+            print(f"[InStore] Analysis failed due to JSON parse error for {interaction_id or 'interaction'}")
+            # Return minimal valid structure so the system doesn't crash
+            return {
+                "customer_satisfaction": None,
+                "summary": "Analysis failed due to parsing error",
+                "topics": [],
+                "action_items": [],
+                "key_indicators": [],
+                "customer_name": None,
+                "interaction_outcome": "Unknown",
+                "learning_suggestions": "Unable to generate coaching suggestions",
+                "coaching_priorities": [],
+                "competitor_intelligence": [],
+                "products_discussed": [],
+                "interaction_matrices": {},
+                "compliance_flags": [],
+                "sla_compliance": None,
+                "sales_executive_performance": None,
+                "overall_sentiment": None
+            }
         
         # Calculate sales_executive_performance from the 5 SALES EXECUTIVE EVALUATION MATRIX metrics
         interaction_matrices = parsed.get('interaction_matrices', {})
@@ -477,7 +513,7 @@ def analyze_instore_interaction(messages, interaction_id=None):
 
 
 def _parse_json(text):
-    """Parse JSON from model output"""
+    """Parse JSON from model output with robust error recovery"""
     if not text:
         return {}
     
@@ -493,19 +529,37 @@ def _parse_json(text):
     
     cleaned = cleaned.strip()
     
+    # Try direct parse first
     try:
         return json.loads(cleaned)
-    except Exception as e:
-        print(f"[InStore] JSON parse error: {e}")
-        # Try to extract JSON from text
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start != -1 and end != -1 and end > start:
+    except json.JSONDecodeError as e:
+        print(f"[InStore] JSON parse error at line {e.lineno} col {e.colno}: {e.msg}")
+        print(f"[InStore] Error near: {e.doc[max(0, e.pos-50):e.pos+50]}")
+    
+    # Try to extract JSON from text
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            extracted = cleaned[start:end + 1]
+            return json.loads(extracted)
+        except json.JSONDecodeError as exp:
+            print(f"[InStore] Extracted JSON parse error at line {exp.lineno}: {exp.msg}")
+            
+            # Last resort: try to fix common JSON issues
             try:
-                extracted = cleaned[start:end + 1]
-                return json.loads(extracted)
-            except Exception as exp:
-                print(f"[InStore] Extracted JSON parse error: {exp}")
+                # Fix unterminated strings by finding and completing them
+                import re
+                fixed = extracted
+                
+                # Find unterminated strings (quote followed by newline without closing quote)
+                # This is a simplified fix - may not catch all cases
+                fixed = re.sub(r'("(?:[^"\\]|\\.)*)\n', r'\1",\n', fixed)
+                
+                # Try to parse the fixed version
+                return json.loads(fixed)
+            except Exception as fix_error:
+                print(f"[InStore] Failed to auto-fix JSON: {fix_error}")
     
     print("[InStore] Could not parse model output as JSON")
     return {}

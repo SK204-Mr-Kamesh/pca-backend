@@ -33,44 +33,81 @@ def _get_elevenlabs_client():
 
 
 def _detect_speakers_with_llm(raw_transcript, interaction_type='pca'):
-    """Use LLM to detect which speaker is customer and which is customer support/sales executive"""
+    """Use LLM to detect speaker roles in transcript with high precision"""
     
     if interaction_type == 'instore':
-        speaker_detection_prompt = """You are an expert at analyzing in-store sales interaction transcripts.
+        speaker_detection_prompt = """You are an EXPERT at analyzing in-store sales transcripts. Your ONLY job is to identify WHO IS THE CUSTOMER and WHO IS THE SALES EXECUTIVE.
 
-Given a raw transcript with speaker labels (speaker_0, speaker_1, etc.), identify which speaker is the customer and which is the sales executive.
+**CRITICAL ACCURACY REQUIREMENT**: You MUST get this correct. Read the ENTIRE transcript word by word.
 
-Look for:
-- Sales executive behaviors: product knowledge, asking discovery questions, making recommendations, handling objections, closing techniques
-- Sales executive language: "Let me show you", "We have", "This product features", "What are you looking for?"
-- Customer behaviors: asking questions, expressing needs, raising concerns, making decisions
-- Customer language: "I need", "How much", "Can you show me", "I'm looking for"
+**THE FUNDAMENTAL RULE**:
+- CUSTOMER = person who WANTS TO BUY, asks prices, makes decisions about purchasing
+- SALES EXECUTIVE = person who SELLS, explains products, gives prices, closes deals
 
-Return a JSON object with:
+**CUSTOMER speaks like this** (they are BUYING):
+- "kitna paisa hai?" / "price kya hai?" / "kitne ka?" (asking price)
+- "mujhe chahiye" / "mein le lunga" / "theek hai" (making decision)
+- "budget mera X hai" / "afford kar sakta hoon?" (discussing budget)
+- "solid wood hai?" / "warranty kitni hai?" (asking about product)
+- Shows hesitation: "sochta hoon", "dekh leta hoon"
+- They ASK QUESTIONS more than give answers
+
+**SALES EXECUTIVE speaks like this** (they are SELLING):
+- "ye mattress hai" / "fabric acha hai" / "10 year warranty" (explaining product)
+- "aap kya chahte ho?" / "budget kya hai?" (asking discovery questions)
+- "price itna hai" / "discount de dunga" / "sirf X rupees" (giving prices)
+- "sir", "madam", "aapko" (addressing customer respectfully)
+- Gives PRODUCT DETAILS and technical specifications
+- They ANSWER QUESTIONS more than ask them
+
+**YOUR TASK**:
+1. Read EVERY line of the transcript
+2. For EACH speaker, note: Are they asking prices OR giving prices? Asking questions OR answering?
+3. The person ASKING PRICES = Customer
+4. The person GIVING PRICES and PRODUCT INFO = Sales Executive
+
+**RESPONSE FORMAT** (ONLY JSON, NO MARKDOWN):
 {
-  "customer_speaker": "speaker_0" or "speaker_1" (whoever is the customer shopping),
-  "sales_executive_speaker": "speaker_0" or "speaker_1" (whoever is the Wakefit sales executive),
-  "confidence": "high" or "medium" or "low",
-  "reasoning": "<brief explanation>"
-}"""
+  "speakers": {
+    "speaker_0": "customer",
+    "speaker_1": "sales_executive"
+  },
+  "primary_sales_executive": "speaker_1",
+  "analysis": "speaker_0 asks 'kitna paisa' and 'le lunga' = customer buying behavior. speaker_1 says 'ye mattress' and 'price itna hai' = sales executive selling behavior.",
+  "confidence": "high"
+}
+
+**CRITICAL**: Return ONLY the JSON object. NO markdown backticks, NO explanations outside JSON."""
     else:
-        speaker_detection_prompt = """You are an expert at analyzing call transcripts.
+        speaker_detection_prompt = """You are an expert at analyzing call transcripts with PERFECT ACCURACY required.
 
-Given a raw transcript with speaker labels (speaker_0, speaker_1, etc.), identify which speaker is the customer and which is the customer support representative.
+CRITICAL: Analyze the FULL transcript provided and identify which speaker is the CUSTOMER and which is the CUSTOMER SUPPORT AGENT.
 
-Look for:
-- Professional greetings ("thank you for calling", "how can I help")
-- Company name mentions ("Wakefit", "calling from Wakefit")
-- Agent self-identification ("this is [name] from [company]", "my name is")
-- Support desk language ("let me check", "I can see", "order number")
-- Customer-like behavior (problem description, asking for help)
+MANDATORY ANALYSIS STEPS:
+1. Read through the ENTIRE transcript carefully word by word
+2. Identify who provides COMPANY SUPPORT (Wakefit agent) - uses professional language, helps resolve issues
+3. Identify who is CALLING FOR HELP (Customer) - describes problems, asks for solutions
 
-Return a JSON object with:
+CUSTOMER SUPPORT AGENT INDICATORS:
+- Professional greeting: "thank you for calling", "How can I help", "Wakefit support"
+- Uses customer names or references their order
+- Explains policies: "warranty", "delivery", "refund policy", "EMI"
+- Takes action: "let me check", "I can see", "I'll arrange"
+- Provides solutions: "we can deliver", "refund available", "here's what we can do"
+
+CUSTOMER INDICATORS:
+- Describes problem: "not received", "damaged", "late delivery", "wrong item"
+- Asks for help: "what can you do", "can you help", "when will it arrive"
+- References their purchase: "order number", "date of purchase", "I ordered"
+- Expresses frustration/concern: "worried", "frustrated", "need it urgently"
+- Makes requests: "can you refund", "can you deliver", "can you check"
+
+Return ONLY valid JSON (absolutely NO markdown, NO explanation):
 {
-  "customer_speaker": "speaker_0" or "speaker_1" (whoever is the customer calling for help),
-  "support_speaker": "speaker_0" or "speaker_1" (whoever is the Wakefit agent),
-  "confidence": "high" or "medium" or "low",
-  "reasoning": "<brief explanation>"
+  "customer_speaker": "speaker_0|speaker_1",
+  "support_speaker": "speaker_0|speaker_1",
+  "analysis": "<specific evidence from transcript>",
+  "confidence": "high"
 }"""
     
     try:
@@ -87,23 +124,79 @@ Return a JSON object with:
             modelId=model_id,
             system=[{"text": speaker_detection_prompt}],
             messages=[{"role": "user", "content": [{"text": f"Transcript:\n\n{raw_transcript}"}]}],
-            inferenceConfig={"maxTokens": 500},
+            inferenceConfig={"maxTokens": 4000},
         )
         text = resp["output"]["message"]["content"][0]["text"].strip()
         
-        # Parse JSON response
+        # Log the raw LLM response for debugging
+        print(f"[TRANSCRIBE] LLM raw response for {interaction_type}:")
+        print(f"[TRANSCRIBE] {text[:500]}")  # First 500 chars
+        
+        # Strip markdown code fences if present
         import json as json_module
+        cleaned_text = text
+        if text.startswith('```'):
+            # Remove opening fence (```json or ```)
+            lines = text.split('\n')
+            if lines[0].startswith('```'):
+                lines = lines[1:]
+            # Remove closing fence
+            if lines and lines[-1].strip() == '```':
+                lines = lines[:-1]
+            cleaned_text = '\n'.join(lines).strip()
+            print(f"[TRANSCRIBE] Stripped markdown fences, cleaned text: {cleaned_text[:200]}")
+        
+        # Parse JSON response with strict validation
         try:
-            return json_module.loads(text)
-        except:
-            # Try to extract JSON from text
-            start = text.find('{')
-            end = text.rfind('}') + 1
+            parsed = json_module.loads(cleaned_text)
+            
+            # Validate response structure
+            if interaction_type == 'instore':
+                if 'speakers' in parsed and 'primary_sales_executive' in parsed:
+                    print(f"[TRANSCRIBE] Speaker detection SUCCESS: {parsed.get('speakers')}")
+                    print(f"[TRANSCRIBE] Analysis: {parsed.get('analysis', 'N/A')}")
+                    return parsed
+                else:
+                    print(f"[TRANSCRIBE] INVALID response structure - missing required fields")
+                    print(f"[TRANSCRIBE] Has 'speakers': {'speakers' in parsed}")
+                    print(f"[TRANSCRIBE] Has 'primary_sales_executive': {'primary_sales_executive' in parsed}")
+            else:
+                if 'customer_speaker' in parsed and 'support_speaker' in parsed:
+                    return parsed
+                else:
+                    print(f"[TRANSCRIBE] INVALID response structure for PCA")
+            
+            # If response missing required fields, try extraction
+            print(f"[TRANSCRIBE] Invalid response structure: {text[:200]}")
+        except Exception as parse_error:
+            print(f"[TRANSCRIBE] JSON parse error: {parse_error}")
+            # Try to extract JSON from text by finding { and }
+            start = cleaned_text.find('{')
+            end = cleaned_text.rfind('}') + 1
             if start >= 0 and end > start:
-                return json_module.loads(text[start:end])
-            return None
+                try:
+                    extracted = json_module.loads(cleaned_text[start:end])
+                    
+                    # Validate extracted structure
+                    if interaction_type == 'instore':
+                        if 'speakers' in extracted and 'primary_sales_executive' in extracted:
+                            print(f"[TRANSCRIBE] Speaker detection SUCCESS (extracted): {extracted.get('speakers')}")
+                            return extracted
+                    else:
+                        if 'customer_speaker' in extracted and 'support_speaker' in extracted:
+                            return extracted
+                    
+                    print(f"[TRANSCRIBE] Extracted JSON missing required fields")
+                except Exception as extract_error:
+                    print(f"[TRANSCRIBE] Extracted JSON also failed: {extract_error}")
+        
+        print(f"[TRANSCRIBE] Could not parse speaker detection response")
+        return None
+        
     except Exception as e:
-        print(f"[TRANSCRIBE] Speaker detection failed: {e}")
+        print(f"[TRANSCRIBE] Speaker detection LLM call failed: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -367,56 +460,67 @@ def detect_language_improved(transcript_messages):
 
 def _detect_agent_speaker(temp_messages, interaction_type='pca'):
     """
-    Detect agent speaker using LLM analysis of first 5 minutes of transcript.
+    Detect agent/sales speaker(s) using LLM analysis of FULL transcript.
     
-    The LLM examines the conversation to identify who is the customer and who is customer support/sales executive.
-    This is more accurate than pattern matching as it understands context.
+    For PCA: Returns single support_speaker
+    For Instore: Returns speaker_roles mapping for all participants
     
     Args:
         temp_messages: List of message dictionaries
         interaction_type: 'pca' for customer support calls, 'instore' for sales interactions
     
-    Returns: speaker ID (string) of the agent/sales executive
+    Returns: 
+        - For PCA: speaker ID string of the agent
+        - For Instore: dict with speaker_roles mapping and primary_sales_executive
     """
     if not temp_messages:
+        if interaction_type == 'instore':
+            return {'speaker_roles': {}, 'primary_sales_executive': 'speaker_0'}
         return 'speaker_0'
     
     if len(temp_messages) < 2:
-        # Single speaker case - can't determine, assume speaker_0 is agent
+        if interaction_type == 'instore':
+            speaker_id = temp_messages[0].get('_raw_speaker', 'speaker_0')
+            return {
+                'speaker_roles': {speaker_id: 'sales_executive'},
+                'primary_sales_executive': speaker_id
+            }
         return temp_messages[0].get('_raw_speaker', 'speaker_0')
     
-    # Filter to first 5 minutes (300 seconds) of the call
-    raw_message = []
-    for msg in temp_messages:
-        start_time = msg.get('start_time', 0)
-        if start_time <= 300:  # 5 minutes = 300 seconds
-            raw_message.append(msg)
-        else:
-            break
-    
-    messages_to_analyze = raw_message if raw_message else temp_messages[:5]
-    
+    # Use FULL transcript for accurate role detection
     raw_transcript = ""
-    for msg in messages_to_analyze:
+    for msg in temp_messages:
         speaker = msg.get('_raw_speaker', 'unknown')
         text = msg.get('text', '')
         raw_transcript += f"{speaker}: {text}\n"
     
-    # Call LLM for speaker detection
+    # Call LLM for speaker detection on full transcript
     detection_result = _detect_speakers_with_llm(raw_transcript, interaction_type)
     
-    if detection_result:
-        if interaction_type == 'instore':
-            support_key = 'sales_executive_speaker'
+    if interaction_type == 'instore':
+        # For instore, return mapping of all speakers and their roles
+        if detection_result and 'speakers' in detection_result:
+            return {
+                'speaker_roles': detection_result['speakers'],
+                'primary_sales_executive': detection_result.get('primary_sales_executive', 'speaker_0'),
+                'confidence': detection_result.get('confidence', 'medium')
+            }
         else:
+            # NO FALLBACK - if LLM fails, we want to know about it
+            print(f"[TRANSCRIBE] CRITICAL: Speaker detection failed for instore interaction!")
+            print(f"[TRANSCRIBE] Detection result was: {detection_result}")
+            # Return None to signal failure
+            return None
+    else:
+        # For PCA, return single support speaker (backward compatible)
+        if detection_result:
             support_key = 'support_speaker'
+            if support_key in detection_result:
+                return detection_result[support_key]
         
-        if support_key in detection_result:
-            return detection_result[support_key]
-    
-    # Fallback: if LLM detection fails, assume second speaker is agent
-    speakers = sorted(set(msg.get('_raw_speaker', '') for msg in messages_to_analyze))
-    return speakers[1] if len(speakers) > 1 else (speakers[0] if speakers else 'speaker_0')
+        # Fallback: assume second speaker is agent
+        speakers = sorted(set(msg.get('_raw_speaker', '') for msg in temp_messages))
+        return speakers[1] if len(speakers) > 1 else (speakers[0] if speakers else 'speaker_0')
 
 
 def _parse_elevenlabs_transcript(transcription, interaction_type='pca'):
@@ -513,15 +617,33 @@ def _parse_elevenlabs_transcript(transcription, interaction_type='pca'):
             'timestamp': timestamp_str
         })
     
-    # Second pass: Detect which speaker is the agent
-    agent_speaker = _detect_agent_speaker(temp_messages, interaction_type)
+    # Second pass: Detect which speaker is the agent and assign roles
+    agent_speaker_result = _detect_agent_speaker(temp_messages, interaction_type)
     
-    # Third pass: Assign correct roles
-    for msg in temp_messages:
-        raw_speaker = msg.pop('_raw_speaker')
-        role = 'agent' if raw_speaker == agent_speaker else 'user'
-        msg['role'] = role
-        messages.append(msg)
+    if interaction_type == 'instore':
+        # Instore: Check if detection succeeded
+        if agent_speaker_result is None or not isinstance(agent_speaker_result, dict):
+            # Detection failed completely - raise error
+            raise ValueError(f"Speaker detection failed for instore interaction. LLM returned invalid response. Check logs for details.")
+        
+        # Use speaker_roles mapping
+        speaker_roles = agent_speaker_result.get('speaker_roles', {})
+        
+        for msg in temp_messages:
+            raw_speaker = msg.pop('_raw_speaker')
+            role = speaker_roles.get(raw_speaker, 'other')
+            msg['role'] = role
+            msg['speaker_id'] = raw_speaker
+            messages.append(msg)
+    else:
+        # PCA: Use single agent speaker (backward compatible)
+        agent_speaker = agent_speaker_result if isinstance(agent_speaker_result, str) else 'speaker_0'
+        
+        for msg in temp_messages:
+            raw_speaker = msg.pop('_raw_speaker')
+            role = 'agent' if raw_speaker == agent_speaker else 'user'
+            msg['role'] = role
+            messages.append(msg)
     
     return messages
 

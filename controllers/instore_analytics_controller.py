@@ -33,7 +33,7 @@ def get_analytics():
         "upload_volume": [{"date": "YYYY-MM-DD", "count": <int>}, ...],
         "sentiment_distribution": {"positive": <float>, "neutral": <float>, "negative": <float>},
         "language_distribution": {<language>: <float %>, ...},
-        "top_topics": [{"topic": "<topic>", "count": <int>}, ...],
+        "top_products": [{"product": "<product_name>", "count": <int>, "percentage": <float>}, ...],
         "sales_executive_leaderboard": [{"sales_executive_id": "<id>", "interactions": <int>, "score": <float>, ...}, ...],
         "executive_summary": ["<insight1>", "<insight2>", ...],
         "coaching_priorities": [{"rank": <int>, "priority": "<text>", "details": "<text>", "severity": "HIGH|MED|LOW"}, ...],
