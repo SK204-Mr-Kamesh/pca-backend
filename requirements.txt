@@ -5,4 +5,4 @@ clickhouse-connect==0.7.0
 python-dotenv==1.0.0
 requests==2.31.0
 Werkzeug==3.0.1
-elevenlabs==1.54.0
+elevenlabs==2.58.0
