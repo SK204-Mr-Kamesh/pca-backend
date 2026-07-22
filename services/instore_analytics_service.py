@@ -64,7 +64,8 @@ def get_instore_analytics():
         overall_sentiments = []
         sla_compliances = []
         topics_list = []
-        languages = []
+        languages = []  # Will store primary languages (for backward compatibility)
+        language_breakdowns = []  # Will store percentage breakdowns from each call
         sales_executive_scores = {}  # For leaderboard
         sales_executive_details = {}  # For coaching priorities
         coaching_priorities_all = []  # Collect all coaching priorities
@@ -169,9 +170,14 @@ def get_instore_analytics():
                 if coaching_priorities and isinstance(coaching_priorities, list):
                     coaching_priorities_all.extend(coaching_priorities)
             
-            # Language
+            # Language - collect both primary language and breakdown percentages
             if record and record.language:
                 languages.append(record.language)
+                # Collect language breakdown from raw_model_response JSON
+                if analytics.raw_model_response and isinstance(analytics.raw_model_response, dict):
+                    lang_breakdown = analytics.raw_model_response.get('language_breakdown')
+                    if lang_breakdown:
+                        language_breakdowns.append(lang_breakdown)
             
             # Build sales executive leaderboard data
             if sales_executive_id not in sales_executive_scores:
@@ -210,11 +216,11 @@ def get_instore_analytics():
         # Upload volume (per day for last 7 days)
         upload_volume = _get_upload_volume_trend(all_records)
         
-        # Sentiment distribution (positive/neutral/negative) - based on overall_sentiment
-        sentiment_distribution = _get_sentiment_distribution(overall_sentiments)
+        # Sentiment distribution (positive/neutral/negative) - based on customer_satisfaction
+        sentiment_distribution = _get_sentiment_distribution(customer_satisfactions)
         
         # Language distribution
-        language_distribution = _get_language_distribution(languages)
+        language_distribution = _get_language_distribution(languages, language_breakdowns)
         
         # Top products discussed
         top_products = _get_top_topics(topics_list)
@@ -376,11 +382,50 @@ def _get_sentiment_distribution(sentiments):
     }
 
 
-def _get_language_distribution(languages):
-    """Get distribution of detected languages"""
+def _get_language_distribution(languages, language_breakdowns=None):
+    """
+    Get distribution of detected languages aggregated to 100% scale.
+    
+    If language_breakdowns provided (per-call percentages), aggregate those.
+    Otherwise, fall back to primary language counting.
+    """
     if not languages:
         return {}
     
+    # If we have language breakdown data from each call, use that for accurate aggregation
+    if language_breakdowns and any(language_breakdowns):
+        # Aggregate all language percentages across all calls
+        aggregated_language_percentages = {}
+        total_calls = 0
+        
+        for breakdown in language_breakdowns:
+            if breakdown and isinstance(breakdown, dict):
+                total_calls += 1
+                for lang, percentage in breakdown.items():
+                    if percentage > 0:  # Only count languages with >0%
+                        if lang not in aggregated_language_percentages:
+                            aggregated_language_percentages[lang] = 0
+                        aggregated_language_percentages[lang] += percentage
+        
+        # Calculate average percentage per language across all calls
+        if total_calls > 0:
+            averaged_percentages = {
+                lang: (total_pct / total_calls) for lang, total_pct in aggregated_language_percentages.items()
+            }
+            
+            # Normalize to 100% scale
+            total_avg = sum(averaged_percentages.values())
+            if total_avg > 0:
+                normalized = {
+                    lang: (pct / total_avg * 100) for lang, pct in averaged_percentages.items()
+                }
+                
+                # Sort by percentage descending
+                return dict(sorted(normalized.items(), key=lambda x: x[1], reverse=True))
+        
+        return {}
+    
+    # Fallback: use primary language counting (backward compatibility)
     language_counts = Counter(languages)
     total = len(languages)
     

@@ -61,7 +61,7 @@ class InstoreRecord:
         self.sales_executive_id = kwargs.get('sales_executive_id', '')
         self.customer_name = kwargs.get('customer_name', '')
         self.status = kwargs.get('status', 'completed')
-        self.language = kwargs.get('language', 'en-US')
+        self.language = kwargs.get('language', 'english')
         self.started_at = kwargs.get('started_at') or datetime.now(timezone.utc)
         self.ended_at = kwargs.get('ended_at') or datetime.now(timezone.utc)
         self.duration_seconds = kwargs.get('duration_seconds', 0)

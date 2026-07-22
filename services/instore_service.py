@@ -125,8 +125,8 @@ ANALYZE the transcript and return ONLY a valid JSON object (no ```json markdown,
     "follow_up_required": "<Yes|No>",
     "total_products_discussed": <number of products>,
     "products_sold": <number of products with sales_outcome=purchased>,
-    "conversion_rate_count": "<products_sold / total_products_discussed>",
-    "conversion_rate_percentage": "<conversion_rate_count * 100>"
+    "conversion_rate_count": "<products_sold/total_products_discussed like 2/5>",
+    "conversion_rate_percentage": <percentage number>
   },
   "compliance_flags": [{
     "flag": "<Misrepresentation|Pressure Tactics|Privacy Violations|Discrimination|Safety Issues|Price Manipulation|Data Security|Professional Conduct|Brand Name Inconsistency>",
@@ -344,10 +344,15 @@ If NO direct brand competitors mentioned → return empty array []
 Base ALL analysis strictly on transcript evidence."""
 
 
-def analyze_instore_interaction(messages, interaction_id=None):
+def analyze_instore_interaction(messages, interaction_id=None, language_details=None):
     """
     Analyze in-store interaction using Claude
     Returns analysis dict with sentiment, matrices, and insights
+    
+    Args:
+        messages: Transcript messages
+        interaction_id: ID of the interaction (for logging)
+        language_details: Language breakdown dictionary from detect_language_improved()
     """
     if not messages:
         return {}
@@ -357,6 +362,9 @@ def analyze_instore_interaction(messages, interaction_id=None):
     try:
         bedrock_client = _get_bedrock_client()
         
+        # Use Claude Sonnet 4.5 - better at structured output than Haiku
+        model_id = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"  # Sonnet 4.5 for reliable JSON
+        
         response = bedrock_client.converse(
             modelId=PCA_MODEL_ID,
             system=[{"text": _INSTORE_ANALYSIS_PROMPT}],
@@ -364,7 +372,7 @@ def analyze_instore_interaction(messages, interaction_id=None):
                 "role": "user",
                 "content": [{"text": f"In-store interaction transcript:\n\n{conversation_text}"}]
             }],
-            inferenceConfig={"maxTokens": 4096, "temperature": 0.3}  # Lower temperature for more consistent JSON
+            inferenceConfig={"maxTokens": 4096, "temperature": 0.3}
         )
         
         text = response["output"]["message"]["content"][0]["text"].strip()
@@ -392,6 +400,10 @@ def analyze_instore_interaction(messages, interaction_id=None):
                 "sales_executive_performance": None,
                 "overall_sentiment": None
             }
+        
+        # Store language breakdown in raw_model_response for analytics aggregation
+        if language_details and isinstance(language_details, dict):
+            parsed['language_breakdown'] = language_details.get('language_breakdown', {})
         
         # Calculate sales_executive_performance from the 5 SALES EXECUTIVE EVALUATION MATRIX metrics
         interaction_matrices = parsed.get('interaction_matrices', {})
@@ -489,18 +501,69 @@ def _parse_json(text):
             
             # Last resort: try to fix common JSON issues
             try:
-                # Fix unterminated strings by finding and completing them
                 import re
                 fixed = extracted
                 
-                # Find unterminated strings (quote followed by newline without closing quote)
-                # This is a simplified fix - may not catch all cases
-                fixed = re.sub(r'("(?:[^"\\]|\\.)*)\n', r'\1",\n', fixed)
+                # Fix 1: Remove orphaned values (value without key)
+                # Pattern: "},<value>," or "],<value>," → remove the orphaned value
+                # This handles cases like "},"3/8","conversion_rate_percentage":" → remove "3/8"
+                fixed = re.sub(r'([}\]]),\s*"[^"]*"\s*,', r'\1,', fixed)
+                fixed = re.sub(r'([}\]]),\s*\d+(\.\d+)?\s*,', r'\1,', fixed)
+                
+                # Fix 2: Replace unescaped quotes inside strings
+                # Pattern: Find ": "something" and fix to ": \"something\"
+                # This handles cases where nested quotes aren't escaped
+                fixed = re.sub(r'": "([^"]*)"([^"]*)"', r'": "\1\\\\\2"', fixed)
+                
+                # Fix 3: Find unterminated strings (quote followed by comma/newline without closing)
+                # Look for patterns like: "key": "value that continues
+                lines = fixed.split('\n')
+                fixed_lines = []
+                for i, line in enumerate(lines):
+                    # Check if line has unclosed quote
+                    quote_count = line.count('"') - line.count('\\"')
+                    if quote_count % 2 == 1:  # Odd number = unclosed quote
+                        # Try to close the quote before the next line
+                        line = line.rstrip(',').rstrip() + '"'
+                    fixed_lines.append(line)
+                fixed = '\n'.join(fixed_lines)
+                
+                # Fix 4: Remove control characters (non-printable chars)
+                fixed = ''.join(char for char in fixed if ord(char) >= 32 or char in '\n\r\t')
                 
                 # Try to parse the fixed version
-                return json.loads(fixed)
+                result = json.loads(fixed)
+                print(f"[InStore] Successfully recovered JSON after fixes")
+                return result
             except Exception as fix_error:
                 print(f"[InStore] Failed to auto-fix JSON: {fix_error}")
+                
+                # Final attempt: Try to extract just the critical parts
+                try:
+                    # At least try to salvage something
+                    if '"overall_sentiment"' in cleaned or '"customer_satisfaction"' in cleaned:
+                        print("[InStore] Attempting partial extraction of key fields...")
+                        partial = {}
+                        
+                        # Extract numeric fields
+                        import re
+                        sentiment_match = re.search(r'"overall_sentiment"\s*:\s*(\d+(?:\.\d+)?)', cleaned)
+                        if sentiment_match:
+                            partial['overall_sentiment'] = float(sentiment_match.group(1))
+                        
+                        csat_match = re.search(r'"customer_satisfaction"\s*:\s*(\d+(?:\.\d+)?)', cleaned)
+                        if csat_match:
+                            partial['customer_satisfaction'] = float(csat_match.group(1))
+                        
+                        perf_match = re.search(r'"sales_executive_performance"\s*:\s*(\d+(?:\.\d+)?)', cleaned)
+                        if perf_match:
+                            partial['sales_executive_performance'] = float(perf_match.group(1))
+                        
+                        if partial:
+                            print(f"[InStore] Extracted partial data: {partial}")
+                            return partial
+                except:
+                    pass
     
     print("[InStore] Could not parse model output as JSON")
     return {}

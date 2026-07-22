@@ -384,8 +384,13 @@ def transcribe_audio(s3_key, language_code='en-US', interaction_type='pca'):
     messages = _parse_elevenlabs_transcript(transcription, interaction_type)
     
     # Enhanced language detection after transcription
-    detected_language = detect_language_improved(messages)
+    detected_language, language_details = detect_language_improved(messages)
     print(f"[TRANSCRIBE] Language detected: {detected_language}")
+    print(f"[TRANSCRIBE] Language breakdown: {language_details}")
+    
+    # Store language details in messages for later use
+    for msg in messages:
+        msg['language_details'] = language_details
     
     # Apply word corrections
     for msg in messages:
@@ -397,81 +402,122 @@ def transcribe_audio(s3_key, language_code='en-US', interaction_type='pca'):
 
 def detect_language_improved(transcript_messages):
     """
-    Enhanced language detection using multiple strategies:
-    1. Character set analysis (Hindi unicode blocks)
-    2. Word frequency (common Hindi/English words)  
-    3. Mixed language detection (Hinglish)
+    Enhanced language detection for ALL Indian languages with percentage calculation.
+    Returns both the primary language AND a breakdown of all detected languages.
+    Percentages add up to 100% including unrecognized characters.
     """
     if not transcript_messages:
-        return 'en-US'
+        return 'en-US', {}
     
-    english_count = 0
-    hindi_count = 0
+    # Unicode ranges for different scripts (UNIQUE ranges - no overlap)
+    script_ranges = {
+        'english': [(ord('a'), ord('z')), (ord('A'), ord('Z')), (ord('0'), ord('9'))],
+        'devanagari': [(0x0900, 0x097F)],       # Hindi, Marathi, Sanskrit
+        'gujarati': [(0x0A80, 0x0AFF)],        # Gujarati
+        'gurmukhi': [(0x0A00, 0x0A7F)],        # Punjabi
+        'tamil': [(0x0B80, 0x0BFF)],           # Tamil
+        'telugu': [(0x0C60, 0x0C7F)],          # Telugu
+        'kannada': [(0x0C80, 0x0CFF)],         # Kannada
+        'malayalam': [(0x0D00, 0x0D7F)],       # Malayalam
+    }
+    
+    # Map scripts to languages
+    script_to_languages = {
+        'english': ['english'],
+        'devanagari': ['hindi'],  # Count Devanagari as Hindi (more common)
+        'gujarati': ['gujarati'],
+        'gurmukhi': ['punjabi'],
+        'tamil': ['tamil'],
+        'telugu': ['telugu'],
+        'kannada': ['kannada'],
+        'malayalam': ['malayalam'],
+    }
+    
+    char_counts = {lang: 0 for lang in ['english', 'hindi', 'marathi', 'gujarati', 'tamil', 'telugu', 'punjabi', 'kannada', 'malayalam']}
     total_chars = 0
-    total_words = 0
-    
-    # Common Hindi words for detection
-    hindi_words = {
-        'हाँ', 'नहीं', 'क्या', 'कैसे', 'कब', 'कहाँ', 'जी', 'सर', 'मैम',
-        'ठीक', 'अच्छा', 'बुरा', 'समस्या', 'आर्डर', 'डिलीवरी', 'पैसा', 'रुपया',
-        'हेलो', 'नमस्ते', 'धन्यवाद', 'शुक्रिया', 'माफ', 'क्षमा'
-    }
-    
-    # Common English words 
-    english_words = {
-        'hello', 'hi', 'yes', 'no', 'thank', 'thanks', 'sorry', 'please',
-        'order', 'delivery', 'wakefit', 'mattress', 'customer', 'support',
-        'help', 'problem', 'issue', 'money', 'refund', 'good', 'bad'
-    }
-    
-    hindi_word_count = 0
-    english_word_count = 0
+    other_chars = 0
     
     for msg in transcript_messages:
         text = msg.get('text', '')
-        if not text:
-            continue
-            
         total_chars += len(text)
-        words = text.lower().split()
-        total_words += len(words)
         
-        # Count Hindi characters (Devanagari script)
-        hindi_count += sum(1 for char in text if '\u0900' <= char <= '\u097F')
-        
-        # Count English characters
-        english_count += sum(1 for char in text if 'a' <= char.lower() <= 'z')
-        
-        # Count language-specific words
-        for word in words:
-            word_clean = word.strip('.,!?():;')
-            if word_clean in hindi_words:
-                hindi_word_count += 1
-            elif word_clean in english_words:
-                english_word_count += 1
+        for char in text:
+            char_code = ord(char)
+            
+            # Find which script this character belongs to
+            detected_script = None
+            for script, ranges in script_ranges.items():
+                for start, end in ranges:
+                    if start <= char_code <= end:
+                        detected_script = script
+                        break
+                if detected_script:
+                    break
+            
+            # Map script to language(s) and count
+            if detected_script:
+                languages = script_to_languages.get(detected_script, [])
+                for lang in languages:
+                    char_counts[lang] += 1
+            else:
+                # Count other characters (spaces, punctuation, symbols) as "other"
+                other_chars += 1
     
-    if total_chars == 0:
-        return 'en-US'
+    # Calculate percentages (total will now equal 100%)
+    language_percentages = {}
+    for lang, count in char_counts.items():
+        language_percentages[lang] = round((count / total_chars * 100), 2) if total_chars > 0 else 0.0
     
-    # Calculate percentages
-    hindi_char_pct = (hindi_count / total_chars) * 100 if total_chars > 0 else 0
-    english_char_pct = (english_count / total_chars) * 100 if total_chars > 0 else 0
-    hindi_word_pct = (hindi_word_count / total_words) * 100 if total_words > 0 else 0
-    english_word_pct = (english_word_count / total_words) * 100 if total_words > 0 else 0
+    # Add "other" category if there are unrecognized characters
+    if other_chars > 0:
+        language_percentages['other'] = round((other_chars / total_chars * 100), 2)
+    
+    # Filter out languages with 0% and sort by percentage (descending)
+    detected_languages = {lang: pct for lang, pct in language_percentages.items() if pct > 0}
+    sorted_languages = sorted(detected_languages.items(), key=lambda x: x[1], reverse=True)
     
     # Debug logging
-    print(f"[LANG-DETECT] Hindi chars: {hindi_char_pct:.1f}%, English chars: {english_char_pct:.1f}%")
-    print(f"[LANG-DETECT] Hindi words: {hindi_word_pct:.1f}%, English words: {english_word_pct:.1f}%")
+    print(f"[LANG-DETECT] Language breakdown: {dict(sorted_languages)}")
     
-    # Classification logic
-    if hindi_char_pct > 30 or hindi_word_pct > 20:
-        return 'hi-IN'  # Predominantly Hindi
-    elif hindi_char_pct > 10 and english_char_pct > 30:
-        return 'hi-IN'  # Hinglish (code-switching, treat as Hindi)
-    elif hindi_word_pct > 5 and english_word_pct > 10:
-        return 'hi-IN'  # Mixed conversation with Hindi elements
+    # Map to language codes
+    lang_code_map = {
+        'english': 'en-US',
+        'hindi': 'hi-IN',
+        'gujarati': 'gu-IN',
+        'marathi': 'mr-IN',
+        'tamil': 'ta-IN',
+        'telugu': 'te-IN',
+        'punjabi': 'pa-IN',
+        'kannada': 'kn-IN',
+        'malayalam': 'ml-IN',
+    }
+    
+    # Get primary language (highest percentage, excluding "other")
+    primary_languages = [(lang, pct) for lang, pct in sorted_languages if lang != 'other']
+    if primary_languages:
+        primary_lang = primary_languages[0][0]
+        primary_code = lang_code_map.get(primary_lang, 'en-US')
     else:
-        return 'en-US'  # Predominantly English
+        primary_code = 'en-US'
+    
+    # Create combined language string (e.g., "hindi,english" or "kannada,gujarati")
+    # Only include languages with >5% to avoid noise (exclude "other")
+    significant_languages = [lang for lang, pct in sorted_languages if pct > 5 and lang != 'other']
+    if not significant_languages:
+        # If no significant language, use primary
+        significant_languages = [primary_lang] if primary_languages else ['english']
+    
+    combined_languages = ','.join(significant_languages)
+    
+    # Return only actual languages in breakdown (exclude "other")
+    language_breakdown_dict = {lang: pct for lang, pct in dict(sorted_languages).items() if lang != 'other'}
+    
+    return primary_code, {
+        'primary_language': primary_code,
+        'combined_languages': combined_languages,  # e.g., "hindi,english"
+        'language_breakdown': language_breakdown_dict,  # Actual languages only
+        'all_languages': language_percentages  # All including "other"
+    }
 
 def _detect_agent_speaker(temp_messages, interaction_type='pca'):
     """

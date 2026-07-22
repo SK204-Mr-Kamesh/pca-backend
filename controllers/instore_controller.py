@@ -92,11 +92,17 @@ def process_upload_async(file_data, interaction_id, customer_name, store_id, sal
         started_at = upload_started_at
         ended_at = started_at + timedelta(seconds=actual_duration) if actual_duration > 0 else started_at
         
-        # Detect language
-        detected_language = 'en-US'
-        transcript_text = ' '.join([msg.get('text', '') for msg in transcript_messages])
-        if any('\u0900' <= char <= '\u097F' for char in transcript_text):
-            detected_language = 'hi-IN'
+        # Get language details from transcript messages (already calculated during transcription)
+        language_details = {}
+        if transcript_messages and len(transcript_messages) > 0:
+            language_details = transcript_messages[0].get('language_details', {})
+        
+        # If not found in messages, detect again
+        if not language_details:
+            from transcribe_service import detect_language_improved
+            detected_language, language_details = detect_language_improved(transcript_messages)
+        
+        combined_languages = language_details.get('combined_languages', 'english')  # e.g., "hindi,english"
         
         # Create interaction record
         update_progress(interaction_id, 'create_record', 'processing',
@@ -108,7 +114,7 @@ def process_upload_async(file_data, interaction_id, customer_name, store_id, sal
             sales_executive_id=sales_executive_id or '',
             customer_name=customer_name or 'Unknown',
             status='completed',
-            language=detected_language,
+            language=combined_languages,  # Store combined language list as comma-separated (e.g., "hindi,english")
             started_at=started_at,
             ended_at=ended_at,
             duration_seconds=actual_duration,
@@ -129,7 +135,7 @@ def process_upload_async(file_data, interaction_id, customer_name, store_id, sal
         update_progress(interaction_id, 'analyze_interaction', 'processing',
                        'Analyzing interaction')
         
-        analysis = instore_service.analyze_instore_interaction(transcript_messages, interaction_id)
+        analysis = instore_service.analyze_instore_interaction(transcript_messages, interaction_id, language_details)
         
         if analysis:
             # Extract matrices from analysis
@@ -315,39 +321,56 @@ def get_interaction(interaction_id):
         
         # Format transcript for frontend
         transcript = []
-        # Track unique customers and sales executives by speaker_id for numbering
-        customer_map = {}
-        customer_counter = 0
-        sales_exec_map = {}
-        sales_exec_counter = 0
         
+        # First pass: Count unique customers and sales executives
+        customer_speakers = set()
+        sales_exec_speakers = set()
+        
+        for msg in transcript_messages:
+            role = msg.get('role', '').lower().strip()
+            speaker_id = msg.get('speaker_id', '')
+            
+            if role in ['user', 'customer']:
+                customer_speakers.add(speaker_id)
+            elif role in ['agent', 'sales_executive']:
+                sales_exec_speakers.add(speaker_id)
+        
+        # Determine if we need numbering (only if more than 1)
+        need_customer_numbering = len(customer_speakers) > 1
+        need_exec_numbering = len(sales_exec_speakers) > 1
+        
+        # Create mapping for numbering (sorted for consistency)
+        customer_map = {speaker_id: idx + 1 for idx, speaker_id in enumerate(sorted(customer_speakers))}
+        sales_exec_map = {speaker_id: idx + 1 for idx, speaker_id in enumerate(sorted(sales_exec_speakers))}
+        
+        # Second pass: Build transcript with proper labels
         for msg in transcript_messages:
             role = msg.get('role')
             speaker_id = msg.get('speaker_id', '')
             
-            # Map role to display name and type
-            if role in ['user', 'customer']:
+            # Map role to display name and type - normalize role to lowercase
+            role_lower = role.lower().strip() if role else ''
+            
+            if role_lower in ['user', 'customer']:
                 speaker_type = 'user'
-                # Assign customer number based on speaker_id
-                if speaker_id not in customer_map:
-                    customer_counter += 1
-                    customer_map[speaker_id] = customer_counter
-                customer_num = customer_map[speaker_id]
-                speaker_label = f"Customer {customer_num}" if customer_counter > 1 else "Customer"
+                if need_customer_numbering:
+                    customer_num = customer_map.get(speaker_id, 1)
+                    speaker_label = f"Customer {customer_num}"
+                else:
+                    speaker_label = "Customer"
                 
-            elif role in ['agent', 'sales_executive']:
+            elif role_lower in ['agent', 'sales_executive']:
                 speaker_type = 'agent'
-                # Assign sales executive number based on speaker_id
-                if speaker_id not in sales_exec_map:
-                    sales_exec_counter += 1
-                    sales_exec_map[speaker_id] = sales_exec_counter
-                exec_num = sales_exec_map[speaker_id]
-                speaker_label = f"Sales Executive {exec_num}" if sales_exec_counter > 1 else "Sales Executive"
+                if need_exec_numbering:
+                    exec_num = sales_exec_map.get(speaker_id, 1)
+                    speaker_label = f"Sales Executive {exec_num}"
+                else:
+                    speaker_label = "Sales Executive"
                 
-            elif role in ['manager', 'supervisor']:
+            elif role_lower in ['manager', 'supervisor']:
                 speaker_label = "Store Manager"
                 speaker_type = 'agent'
-            elif role in ['staff', 'other_staff']:
+            elif role_lower in ['staff', 'other_staff', 'other']:
                 speaker_label = "Staff Member"
                 speaker_type = 'agent'
             else:
