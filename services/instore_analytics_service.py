@@ -588,25 +588,39 @@ def _get_coaching_priorities_from_raw_data(coaching_priorities_all):
             if 'evidence' in priority_item:
                 priority_map[priority_name]['examples'].append(priority_item['evidence'])
     
-    # Calculate average scores and sort by count (most frequent first)
+    # Calculate average scores and sort by severity (HIGH > MED > LOW) then by count
     result = []
     for priority_data in priority_map.values():
         avg_score = priority_data['total_score'] / priority_data['count'] if priority_data['count'] > 0 else 0.0
+        
+        # Determine severity based on score
+        if avg_score < 5:
+            severity = 'HIGH RISK'
+            severity_rank = 1
+        elif avg_score < 7:
+            severity = 'MED RISK'
+            severity_rank = 2
+        else:
+            severity = 'LOW RISK'
+            severity_rank = 3
+        
         result.append({
             'rank': 0,  # Will be set later
             'priority': priority_data['priority'],
             'count': priority_data['count'],
             'avg_score': round(avg_score, 2),
             'details': f"Found in {priority_data['count']} interactions, avg score: {avg_score:.1f}/10",
-            'severity': 'HIGH' if avg_score < 5 else 'MED' if avg_score < 7 else 'LOW'
+            'severity': severity,
+            'severity_rank': severity_rank
         })
     
-    # Sort by count (descending) and take top 5
-    result.sort(key=lambda x: x['count'], reverse=True)
+    # Sort by severity (HIGH first), then by count (descending)
+    result.sort(key=lambda x: (x['severity_rank'], -x['count']))
     
-    # Set ranks
+    # Set ranks and remove severity_rank from output
     for i, item in enumerate(result[:5]):
         item['rank'] = i + 1
+        del item['severity_rank']
     
     return result[:5]
 
