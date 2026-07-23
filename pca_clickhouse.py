@@ -338,39 +338,49 @@ def get_analytics_map(call_ids):
 
 
 def upsert_analytics(a: CallAnalytics):
-    """Insert (or replace) an analytics row"""
-    # Combine raw_model_response with validation in a single JSON
-    combined_response = {}
-    if a.raw_model_response:
-        combined_response = a.raw_model_response.copy() if isinstance(a.raw_model_response, dict) else {}
-    
-    # Add validation data to the combined response
-    if a.validation_results:
-        combined_response["validation"] = {
-            "results": a.validation_results,
-            "score": a.validation_score,
-            "percentage": a.validation_percentage,
-            "skill_level": a.skill_level
-        }
-    
-    row = [
-        a.call_id,
-        a.overall_sentiment,
-        a.customer_satisfaction,
-        a.agent_performance,
-        a.summary or "",
-        list(a.topics or []),
-        list(a.action_items or []),
-        list(a.key_indicators or []),
-        json.dumps(a.call_matrices or {}),
-        a.customer_name,
-        a.hangup_reason,
-        json.dumps(combined_response) if combined_response else "",
-        a.model_id or "",
-        a.created_on or _now(),
-    ]
+    """Insert or replace an analytics row (proper upsert to prevent duplicates)"""
     try:
-        _get_client().insert(ANALYTICS_TABLE, [row], column_names=_ANALYTICS_COLUMNS)
+        client = _get_client()
+        
+        # Delete existing analytics record first
+        client.command(
+            f"ALTER TABLE {ANALYTICS_TABLE} DELETE WHERE call_id = %(cid)s",
+            parameters={"cid": a.call_id}
+        )
+        
+        # Combine raw_model_response with validation in a single JSON
+        combined_response = {}
+        if a.raw_model_response:
+            combined_response = a.raw_model_response.copy() if isinstance(a.raw_model_response, dict) else {}
+        
+        # Add validation data to the combined response
+        if a.validation_results:
+            combined_response["validation"] = {
+                "results": a.validation_results,
+                "score": a.validation_score,
+                "percentage": a.validation_percentage,
+                "skill_level": a.skill_level
+            }
+        
+        row = [
+            a.call_id,
+            a.overall_sentiment,
+            a.customer_satisfaction,
+            a.agent_performance,
+            a.summary or "",
+            list(a.topics or []),
+            list(a.action_items or []),
+            list(a.key_indicators or []),
+            json.dumps(a.call_matrices or {}),
+            a.customer_name,
+            a.hangup_reason,
+            json.dumps(combined_response) if combined_response else "",
+            a.model_id or "",
+            a.created_on or _now(),
+        ]
+        
+        client.insert(ANALYTICS_TABLE, [row], column_names=_ANALYTICS_COLUMNS)
+        
     except Exception as e:
         print(f"[PCA-CH] upsert_analytics failed for {a.call_id}: {e}")
         _reset_client()

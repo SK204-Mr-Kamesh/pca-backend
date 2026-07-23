@@ -10,8 +10,8 @@ import boto3
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import clickhouse_integration as ch
-from clickhouse_integration import CallRecord, CallAnalytics
+import pca_clickhouse as ch
+from pca_clickhouse import CallRecord, CallAnalytics
 from services import validation_service
 
 RECORDINGS_BUCKET = os.environ.get("S3_RECORDINGS_BUCKET", "sahaa-voiceai-recordings")
@@ -45,13 +45,27 @@ def load_transcript_from_s3(transcript_key):
 
 
 def format_transcript(messages):
-    """Format messages for LLM analysis"""
+    """Format messages for LLM analysis with precise timestamps"""
     if not messages:
         return "(No conversation)"
+    
     lines = []
     for msg in messages:
         role = "Customer" if msg.get("role") == "user" else "Customer Support"
-        lines.append(f"{role}: {msg.get('text', '')}")
+        
+        # Include timestamp for accurate coaching suggestions
+        timestamp = "00:00"
+        if 'timestamp' in msg and isinstance(msg['timestamp'], str) and ':' in msg['timestamp']:
+            timestamp = msg['timestamp']
+        elif 'start_time' in msg:
+            # Calculate from start_time in seconds
+            start_seconds = float(msg['start_time'])
+            minutes = int(start_seconds // 60)
+            seconds = int(start_seconds % 60)
+            timestamp = f"{minutes:02d}:{seconds:02d}"
+        
+        lines.append(f"[{timestamp}] {role}: {msg.get('text', '')}")
+    
     return "\n".join(lines)
 
 
@@ -83,85 +97,340 @@ def _messages_to_turns(messages, started_at=None):
     return turns
 
 
-_ANALYSIS_SYSTEM_PROMPT = """You are a call-quality analyst for a customer-support voice platform.
-You receive a full transcript of a completed call between a Customer Support Agent and a Customer.
-Analyse it and respond with ONLY a single valid JSON object — no prose, no markdown fences.
+_ANALYSIS_SYSTEM_PROMPT = """You are an expert call quality analyst for Wakefit customer support operations.
 
-The JSON must have exactly these keys:
+ROLE CLARIFICATION:
+- "Customer Support" = Wakefit agent (the employee being evaluated)  
+- "Customer" = Person calling for help (the caller)
+
+TASK: Analyze the provided transcript and return ONLY a valid JSON object (no markdown, no commentary).
+
+🚨 CRITICAL: TIMESTAMP ACCURACY REQUIREMENT 🚨
+The transcript includes timestamps in [MM:SS] format. When referencing any timestamps in your analysis:
+- Use ONLY the EXACT timestamps shown in the transcript
+- DO NOT guess, approximate, or create new timestamps
+- Format all timestamp references as [MM:SS] exactly as shown in transcript
+- This applies to: key_indicators, learning_suggestions, compliance_flags, coaching_priorities
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REQUIRED OUTPUT SCHEMA (16+ metrics)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 {
-  "overall_sentiment": <number 0-10>,
-  "customer_satisfaction": <number 0-10>,
-  "agent_performance": <number 0-10>,
-  "summary": "<3-5 sentence summary of the call>",
-  "topics": ["<short topic>", ...],
-  "action_items": ["<action item>", ...],
-  "key_indicators": ["<short observation supporting the sentiment scores>", ...],
-  "customer_name": "<customer name if mentioned, else null>",
-  "hangup_reason": "<short reason the call ended, e.g. 'Issue resolved'>",
-  "compliance_flags": [
-    {
-      "flag": "<flag name>",
-      "severity": "<HIGH|MEDIUM|LOW>",
-      "description": "<detailed description with specific context and evidence from the call>",
-      "timestamp": "<approximate time in call when detected, e.g., '02:15'>",
-      "evidence": "<direct quote or specific statement from transcript that triggered this flag>"
-    }
-  ],
-  "call_matrices": {
-    "issue_type": "<primary reason for the call, e.g. 'Account inquiry', 'Payment issue', 'Technical support'>",
-    "resolution_status": "<Was the issue resolved? 'Resolved', 'Pending', 'Escalated', or 'Unresolved'>",
-    "escalation_required": "<Does this call need follow-up? 'Yes' or 'No'>",
-    "payment_mentioned": "<Was payment or billing discussed? 'Yes' or 'No'>",
-    "product_service": "<Product or service discussed, if any, else 'N/A'>",
-    "customer_intent": "<What did the customer want to achieve? Brief description>"
-  }
+  "customer_satisfaction": <number 0-10>,  
+  "summary": "<3-5 sentence call summary>",
+  "topics": ["<topic1>", "<topic2>", ...],
+  "action_items": ["<action1>", "<action2>", ...],
+  "key_indicators": ["<evidence1>", "<evidence2>", ...],
+  "customer_name": "<name or null>",
+  "hangup_reason": "<reason>",
+  "avg_wait_time": <seconds customer was on hold>,
+  "sla_compliance": <percentage 0-100>,
+  "abandonment_rate": <0 or 100>,
+  "learning_suggestions": "<coaching advice>",
+  "competitor_intelligence": [<competitor mentions>],
+  "compliance_flags": [<policy violations>],
+  "call_matrices": {<call metrics>},
+  "coaching_priorities": [<insights with scores>]
 }
 
-COMPLIANCE FLAGS TO DETECT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DETAILED FIELD INSTRUCTIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**HIGH SEVERITY:**
-- "Abusive Language" - Profanity, offensive language, threats from either party
-- "Data Security Breach" - Credit card numbers, passwords, or sensitive data spoken
-- "Legal Threats" - Customer threatens lawsuit or legal action
-- "Unauthorized Commitment" - Agent promises refunds/actions beyond authority
-- "Privacy Violation" - Personal data of other customers mentioned
+1. customer_satisfaction (0-10 scale)
+   Guidelines:
+   - 9-10: Customer explicitly expresses satisfaction ("thank you so much", "perfect", "excellent service")
+   - 7-8: Customer accepts solution, shows appreciation ("okay thanks", "that helps")
+   - 5-6: Customer accepts but neutral ("fine", "okay", no emotion)
+   - 3-4: Customer expresses dissatisfaction ("this is not acceptable", repeats concern)
+   - 1-2: Customer very upset ("I want manager", threatens escalation, hangs up angry)
+   
+   Evidence Required: Quote exact phrase showing satisfaction/dissatisfaction with timestamp
 
-**MEDIUM SEVERITY:**
-- "Compliance Violation" - Missing mandatory disclosures (recording notice, privacy policy)
-- "Misinformation" - Agent provides incorrect product/policy information
-- "Escalation Ignored" - Customer requests supervisor but not escalated
-- "Long Hold Time" - Customer mentions being on hold for extended period
-- "Unprofessional Behavior" - Agent rude, dismissive, or lacks empathy
+2. summary (string, exactly 3-5 sentences)
+   Format:
+   - Sentence 1: Reason for call (what customer wanted)
+   - Sentence 2: Main issue or concern discussed  
+   - Sentence 3-4: Actions taken by agent
+   - Sentence 5: Resolution status and customer response
+   
+   Example:
+   "Customer called regarding delayed delivery of Order #12345 placed on Jan 15. Customer expected delivery by Jan 20 but had not received the mattress. Agent checked system and found shipment delayed due to logistics issue in customer's area. Agent initiated priority delivery for next day and offered 10% refund as compensation. Customer accepted the solution and thanked the agent."
 
-**LOW SEVERITY:**
-- "No Recording Notice" - Agent didn't inform customer about call recording
-- "Incomplete Information" - Agent couldn't provide complete answer to customer query
-- "Customer Satisfaction Risk" - Customer clearly dissatisfied at end of call
+3. topics (array of 3-5 strings max)
+   CRITICAL: Use ONLY standardized topic names from this taxonomy to ensure consistent analytics
+   
+   📋 STANDARD WAKEFIT TOPIC TAXONOMY:
+   
+   🚚 DELIVERY ISSUES:
+   - "Delivery Delay" (for any late/delayed deliveries)
+   - "Delivery Damaged" (for damaged products during delivery)  
+   - "Delivery Wrong Address" (for address/location issues)
+   - "Delivery Missed" (for missed delivery attempts)
+   - "Delivery Rescheduling" (for delivery date changes)
+   
+   💰 PAYMENT & REFUNDS:
+   - "Refund Request" (for any refund requests)
+   - "Payment Issue" (for payment failures/problems)
+   - "Billing Query" (for billing questions)
+   - "Price Match Request" (for price matching)
+   
+   📦 PRODUCT ISSUES:
+   - "Product Quality Issue" (for defects, comfort, quality complaints)
+   - "Product Size Issue" (for wrong size/dimensions)
+   - "Product Exchange" (for product exchanges)
+   - "Product Information" (for product details/specifications)
+   - "Assembly Issue" (for setup/installation problems)
+   
+   📞 ORDER MANAGEMENT:
+   - "Order Status Inquiry" (for order tracking/status)
+   - "Order Cancellation" (for order cancellations)  
+   - "Order Modification" (for changes to existing orders)
+   - "New Order Placement" (for placing new orders)
+   
+   🔧 TECHNICAL SUPPORT:
+   - "Website Issue" (for website/app problems)
+   - "Account Access" (for login/account issues)
+   - "Warranty Claim" (for warranty-related requests)
+   - "Installation Support" (for setup assistance)
+   
+   📋 GENERAL:
+   - "General Inquiry" (for general questions)
+   - "Complaint Escalation" (for escalated complaints)
+   - "Feedback/Review" (for customer feedback)
+   
+   RULES:
+   - Use EXACT names from taxonomy above
+   - Match the customer's issue to the closest standard topic
+   - Include Order ID when mentioned (e.g., "Order Status Inquiry - #12345")
+   - Maximum 3-5 topics per call
+   - If issue doesn't fit taxonomy, use closest match
+   
+   Examples:
+   ✅ Good: ["Delivery Delay - #12345", "Refund Request", "Product Quality Issue"]
+   ❌ Bad: ["Late Delivery", "Money Back", "Defective Product"]
 
-IMPORTANT: Only include flags that are clearly evident in the transcript. If no compliance issues detected, return empty array: "compliance_flags": []
+4. action_items (array of 2-4 strings)
+   Guidelines:
+   - List concrete follow-up actions with timeline
+   - Specify who is responsible
+   - Include deadlines if mentioned
+   
+   Example:
+   [
+     "Agent to process 10% refund within 24 hours", 
+     "Customer to receive replacement mattress by Feb 5",
+     "Quality team to investigate reported defect in Batch #ABC123"
+   ]
 
-SCORING GUIDELINES (0-10 scale, where 10 = best):
+5. key_indicators (array of 3-4 strings)
+   Guidelines:
+   - Each indicator = evidence-based sentiment observation
+   - Include EXACT timestamp from transcript using [MM:SS] format
+   - Focus on emotional tone shifts in conversation
+   - CRITICAL: Use only the timestamps shown in transcript - DO NOT guess or approximate
+   
+   Example:
+   [
+     "Customer expressed frustration at [01:25] about repeated follow-ups needed",
+     "Agent showed genuine empathy at [02:10] with sincere apology", 
+     "Customer tone improved significantly at [03:40] after refund offer",
+     "Call ended positively at [04:20] with customer thanking agent multiple times"
+   ]
 
-**overall_sentiment**: Rate the overall tone and emotional quality of the call
-- 8-10: Positive, friendly, cooperative atmosphere throughout
-- 5-7: Neutral or mixed emotions, some tension but generally professional
-- 2-4: Negative tone, frustration, complaints, or dissatisfaction evident
-- 0-1: Highly negative, angry, hostile interaction
+6. customer_name (string or null)
+   - Extract full name if clearly mentioned in transcript
+   - If only first name mentioned, use first name
+   - If no name mentioned, return null
 
-**customer_satisfaction**: Rate how satisfied the customer appears to be
-- 8-10: Customer expresses clear satisfaction, thanks agent, issue fully resolved
-- 5-7: Customer accepts the outcome, no strong positive/negative signals
-- 2-4: Customer expresses frustration, dissatisfaction, or unresolved concerns
-- 0-1: Customer is very unhappy, threatens to escalate, or explicitly dissatisfied
+7. hangup_reason (string, one concise phrase)
+   Examples: "Issue resolved", "Escalated to supervisor", "Customer hung up", "Call completed", "Technical difficulties"
 
-**agent_performance**: Rate the agent's effectiveness and professionalism
-- 8-10: Excellent communication, empathy, problem-solving, professional throughout
-- 5-7: Adequate performance, handles basic tasks but may lack polish or efficiency
-- 2-4: Poor communication, lacks empathy, struggles to help, unprofessional moments
-- 0-1: Very poor performance, rude, unable to assist, or major errors
+8. avg_wait_time (number, seconds)
+    Calculate total seconds customer was on hold:
+    - Count "please hold", "one moment", "let me check" occurrences  
+    - Estimate hold duration based on context
+    - Sum all hold periods in the call
+    - Return total seconds as number
+    
+    Example: If customer on hold twice (2 minutes + 1 minute) = 180 seconds
 
-Be realistic with scores. A typical successful call should score 6-8, not perfect 10s.
-Base all ratings strictly on evidence from the transcript provided."""
+9. sla_compliance (number, percentage - GRADUATED scoring: 0%, 25%, 50%, 75%, 100%)
+    
+    DEFINITION: SLA Compliance measures adherence to Service Level Agreements - the predefined 
+    performance standards and time-bound commitments promised to customers.
+    
+    SCORING FRAMEWORK (Graduated - Per Call Basis):
+    
+    A call receives a graduated compliance score based on how many criteria are met:
+    
+    COMPLIANCE CRITERIA (Check all 3):
+    
+    1. SPEED OF ANSWER (Threshold)
+       - Standard: Agent must answer within 30 seconds of call start
+       - Measurement: Time from [00:00] (call start) to first agent message
+       - Status: YES if ≤30 sec, NO if >30 sec
+       - Evidence: Look at first message timestamp in transcript
+       
+    2. FIRST CONTACT RESOLUTION (Threshold)
+       - Standard: Issue should be resolved on first call (no escalation needed)
+       - Measurement: Does call end with resolution or escalation?
+       - Status: YES if resolved without escalation, NO if escalated to supervisor/manager/specialist
+       - Evidence: Check hangup_reason and whether customer asked for manager/escalation
+       
+    3. MAXIMUM HOLD TIME (Threshold)
+       - Standard: No single hold period should exceed 3 minutes (180 seconds)
+       - Measurement: Find longest single hold period
+       - Status: YES if max hold ≤ 180 sec, NO if any hold > 180 sec
+       - Evidence: Count all "hold", "please wait", "one moment" instances and calculate max duration
+    
+    SCORING LOGIC (Graduated Based on Criteria Met):
+    - If 0 criteria met → sla_compliance = 0 (no compliance)
+    - If 1 criterion met → sla_compliance = 25 (minimal compliance)
+    - If 2 criteria met → sla_compliance = 50 (partial compliance)
+    - If 3 criteria met → sla_compliance = 75 (substantial compliance)
+    - If all 3 criteria met PLUS call handled excellently → sla_compliance = 100 (full compliance)
+    
+    RATIONALE: Graduated scoring recognizes that partial SLA adherence is better than none,
+    allowing for realistic call center metrics where perfect compliance is rare.
+    
+    Example Calculation:
+    - Call A: Answered [00:15]✅, no escalation✅, max hold 1:30✅ → 3/3 criteria → 75-100%
+    - Call B: Answered [00:45]❌, no escalation✅, max hold 1:30✅ → 2/3 criteria → 50%
+    - Call C: Answered [00:20]✅, escalated❌, max hold 2:00❌ → 1/3 criteria → 25%
+    - Call D: Answered [01:00]❌, escalated❌, max hold 4:00❌ → 0/3 criteria → 0%
+
+10. abandonment_rate (number, 0 or 100)
+    - 0 = Call was answered and completed normally
+    - 100 = Call was abandoned/dropped before completion
+
+11. learning_suggestions (string, 2-3 sentences)
+    Provide ONE specific, actionable coaching suggestion:
+    - Focus on biggest improvement opportunity 
+    - Reference EXACT timestamp from transcript (use [MM:SS] format provided)
+    - Suggest alternative approach
+    - CRITICAL: Use only the timestamps shown in transcript - DO NOT guess or approximate
+    
+    Example: "At [03:40] when customer expressed concern about delivery time, instead of saying 'that's our standard policy', you could have acknowledged their urgency first and then offered alternative solutions like expedited shipping or specific delivery date confirmation."
+
+12. competitor_intelligence (array of objects or empty array)
+    When customer mentions competitor brands, extract:
+    [
+      {
+        "competitor_name": "<exact company name mentioned>",
+        "product_mentioned": "<specific product/feature>", 
+        "comparison_type": "cheaper|better_feature|quality|service|other",
+        "customer_sentiment": "appreciation|complaint|query|suggestion|neutral",
+        "details": "<what customer said about competitor>",
+        "timestamp": "<MM:SS when mentioned>"
+      }
+    ]
+    If NO competitors mentioned: return []
+
+13. compliance_flags (array of objects or empty array)
+    Detect policy violations with precise evidence:
+    [
+      {
+        "flag": "<violation type>",
+        "severity": "HIGH|MEDIUM|LOW", 
+        "description": "<detailed description>",
+        "timestamp": "[MM:SS]",
+        "evidence": "<exact quote from transcript>"
+      }
+    ]
+    
+    CRITICAL: Use EXACT timestamps from transcript in [MM:SS] format - DO NOT guess or approximate
+    
+    HIGH SEVERITY: Abusive language, data security breach, legal threats, unauthorized commitments
+    MEDIUM SEVERITY: Missing disclosures, misinformation, ignored escalations, unprofessional behavior  
+    LOW SEVERITY: No recording notice, incomplete information, customer satisfaction risk
+    
+    If NO violations detected: return []
+
+14. call_matrices (object)
+    {
+      "issue_type": "<primary reason for call>",
+      "resolution_status": "Resolved|Pending|Escalated|Unresolved", 
+      "escalation_required": "Yes|No",
+      "payment_mentioned": "Yes|No",
+      "product_service": "<specific product discussed>",
+      "customer_intent": "<what customer wanted to achieve>"
+    }
+
+15. coaching_priorities (array of 3-5 objects)
+    Generate coaching insights with scores:
+    [
+      {
+        "priority": "<specific skill to improve>",
+        "score": <current performance 0-10>,
+        "evidence": "<what happened in call with EXACT timestamp [MM:SS]>",
+        "suggestion": "<how to improve>"
+      }
+    ]
+    
+    CRITICAL: Include EXACT timestamps from transcript in evidence field using [MM:SS] format
+    Focus on: greeting quality, listening skills, empathy, product knowledge, closing technique
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXAMPLE ANALYSIS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Input Transcript:
+"[00:00] Customer Support: Good morning, thank you for calling Wakefit. How can I help you today?
+[00:15] Customer: Hi, I ordered a mattress last week, order number 12345, but it hasn't arrived yet.
+[00:35] Customer Support: I understand your concern. Let me check your order status. Please hold for a moment.
+[00:50] Customer: Okay, but I really need it by tomorrow for my new apartment.
+[01:20] Customer Support: I can see your order here. There's been a delay due to logistics issues in your area. I sincerely apologize for this inconvenience. 
+[01:45] Customer: This is really frustrating. I specifically chose Wakefit because you promised quick delivery.
+[02:05] Customer Support: I completely understand your frustration, and I want to make this right. I can arrange priority delivery for tomorrow and also process a 10% refund for the delay.
+[02:35] Customer: That would be great, thank you. Will I get confirmation?
+[02:45] Customer Support: Absolutely. You'll receive SMS and email confirmation within an hour. Is there anything else I can help you with?
+[03:00] Customer: No, that covers it. Thanks for sorting this out.
+[03:10] Customer Support: Thank you for your patience. Have a wonderful day!"
+
+Expected Output:
+{
+  "customer_satisfaction": 8, 
+  "summary": "Customer called about delayed delivery of Order #12345 placed last week. Customer needed mattress by next day for new apartment but order was delayed due to logistics issues. Agent apologized, arranged priority delivery for next day, and offered 10% refund as compensation. Customer accepted the solution and expressed satisfaction with the resolution.",
+  "topics": ["Delivery Delay - #12345", "Refund Request"],
+  "action_items": ["Priority delivery arranged for tomorrow", "10% refund to be processed", "SMS and email confirmation to be sent within 1 hour"],
+  "key_indicators": ["Customer expressed frustration at [01:45] about delivery promise", "Agent showed empathy at [02:05] with sincere apology", "Customer satisfaction increased at [02:35] after compensation offer", "Call ended positively at [03:10] with customer thanking agent"],
+  "customer_name": null,
+  "hangup_reason": "Issue resolved satisfactorily",
+  "avg_wait_time": 30,
+  "sla_compliance": 100,
+  "abandonment_rate": 0,
+  "learning_suggestions": "Excellent handling of customer frustration. Consider proactively checking delivery status before customer calls to prevent such situations.",
+  "competitor_intelligence": [],
+  "compliance_flags": [],
+  "call_matrices": {
+    "issue_type": "Delivery Delay",
+    "resolution_status": "Resolved",
+    "escalation_required": "No", 
+    "payment_mentioned": "Yes",
+    "product_service": "Mattress Order #12345",
+    "customer_intent": "Get mattress delivered on time"
+  },
+  "coaching_priorities": [
+    {"priority": "Proactive Communication", "score": 7, "evidence": "Could have proactively updated customer about delay", "suggestion": "Implement automated delay notifications"},
+    {"priority": "Empathy Expression", "score": 9, "evidence": "Excellent empathy shown when customer expressed frustration", "suggestion": "Continue using empathetic language"},
+    {"priority": "Solution Offering", "score": 8, "evidence": "Good compensation package offered", "suggestion": "Consider offering options to customer"}
+  ]
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CRITICAL REMINDERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Return ONLY valid JSON (no markdown blocks, no commentary)
+2. All timestamps in MM:SS format  
+3. Base all scores on explicit evidence from transcript
+4. Keep evidence statements concise (1-2 sentences max)
+5. Use realistic scores (avoid perfect 10s unless exceptional)
+6. Include all required fields, use null for missing data
+7. Ensure arrays are properly formatted with quotes
+8. Double-check JSON syntax before responding"""
 
 
 def _invoke_bedrock_analysis(conversation_text):
@@ -173,7 +442,7 @@ def _invoke_bedrock_analysis(conversation_text):
             modelId=PCA_MODEL_ID,
             system=[{"text": _ANALYSIS_SYSTEM_PROMPT}],
             messages=[{"role": "user", "content": [{"text": f"Call transcript:\n\n{conversation_text}"}]}],
-            inferenceConfig={"maxTokens": 2000},
+            inferenceConfig={"maxTokens": 4096},
         )
         text = resp["output"]["message"]["content"][0]["text"].strip()
         return _parse_json(text)
@@ -268,9 +537,7 @@ def analyze_call(call_id, force=False, end_reason=None, run_validation=True):
         idx += 1
 
     analytics = existing or CallAnalytics(call_id=call_id)
-    analytics.overall_sentiment = _to_score(parsed.get("overall_sentiment"))
     analytics.customer_satisfaction = _to_score(parsed.get("customer_satisfaction"))
-    analytics.agent_performance = _to_score(parsed.get("agent_performance"))
     analytics.summary = parsed.get("summary") or ""
     analytics.topics = parsed.get("topics") or []
     analytics.action_items = parsed.get("action_items") or []
@@ -293,11 +560,29 @@ def analyze_call(call_id, force=False, end_reason=None, run_validation=True):
                 analytics.validation_score = val_data.get("total_earned_score")
                 analytics.validation_percentage = val_data.get("percentage")
                 analytics.skill_level = val_data.get("skill_level")
+                
+                # Calculate agent performance from validation scores: (total/54)*10
+                total_score = float(val_data.get("total_earned_score", 0))
+                analytics.agent_performance = round((total_score / 54) * 10, 2)
+                
                 print(f"[PCA] Validation complete: {analytics.skill_level} ({analytics.validation_percentage}%)")
+                print(f"[PCA] Agent performance: {analytics.agent_performance}/10")
+                
         except Exception as e:
             print(f"[PCA] Validation failed for {call_id}: {e}")
             import traceback
             traceback.print_exc()
+    
+    # Calculate overall sentiment as 50/50 (customer_satisfaction + agent_performance)  
+    if analytics.customer_satisfaction is not None and analytics.agent_performance is not None:
+        analytics.overall_sentiment = round((float(analytics.customer_satisfaction) + float(analytics.agent_performance)) / 2, 2)
+        print(f"[PCA] Overall sentiment: {analytics.overall_sentiment}/10 (CSAT: {analytics.customer_satisfaction} + Agent: {analytics.agent_performance})")
+    elif analytics.customer_satisfaction is not None:
+        # Fallback if no agent performance
+        analytics.overall_sentiment = round(float(analytics.customer_satisfaction), 2)
+        print(f"[PCA] Overall sentiment: {analytics.overall_sentiment}/10 (CSAT only)")
+    else:
+        analytics.overall_sentiment = None
 
     try:
         ch.upsert_analytics(analytics)
@@ -351,7 +636,7 @@ def ingest_call(payload):
 
 
 def get_call_details(call_id):
-    """Get full call details with analytics"""
+    """Get full call details with analytics and agent performance metrics"""
     from datetime import timedelta, timezone
     
     record = ch.get_record(call_id)
@@ -386,7 +671,7 @@ def get_call_details(call_id):
             dt = dt.replace(tzinfo=timezone.utc)
         ist_offset = timedelta(hours=5, minutes=30)
         ist_dt = dt.astimezone(timezone.utc) + ist_offset
-        return ist_dt.strftime("%d/%m/%Y, %H:%M:%S")
+        return ist_dt.isoformat()
     
     # Convert audio size to MB
     audio_size_mb = None
@@ -434,18 +719,45 @@ def get_call_details(call_id):
         data["actionItems"] = analytics.action_items or []
         data["matrices"] = analytics.call_matrices or {}
         data["sentiment"] = {
-            "overallSentiment": float(analytics.overall_sentiment) if analytics.overall_sentiment is not None else 0,
-            "customerSatisfaction": float(analytics.customer_satisfaction) if analytics.customer_satisfaction is not None else 0,
-            "agentPerformance": float(analytics.agent_performance) if analytics.agent_performance is not None else 0,
+            "overallSentiment": round(float(analytics.overall_sentiment), 2) if analytics.overall_sentiment is not None else 0,
+            "customerSatisfaction": round(float(analytics.customer_satisfaction), 2) if analytics.customer_satisfaction is not None else 0,
+            "agentPerformance": round(float(analytics.agent_performance), 2) if analytics.agent_performance is not None else 0,
             "keyIndicators": analytics.key_indicators or [],
         }
+        
+        # Add agent performance metrics from validation results
+        if analytics.validation_results:
+            data["agentPerformanceMetrics"] = _extract_agent_performance_metrics(analytics.validation_results)
+        else:
+            data["agentPerformanceMetrics"] = {}
         
         # Add compliance flags if available
         if analytics.raw_model_response and isinstance(analytics.raw_model_response, dict):
             compliance_flags = analytics.raw_model_response.get("compliance_flags", [])
             data["complianceFlags"] = compliance_flags if compliance_flags else []
+            
+            # Add learning suggestions if available
+            learning_suggestions = analytics.raw_model_response.get("learning_suggestions")
+            data["learningSuggestions"] = learning_suggestions if learning_suggestions else ""
+            
+            # Add competitor intelligence if available
+            competitor_intelligence = analytics.raw_model_response.get("competitor_intelligence", [])
+            data["competitorIntelligence"] = competitor_intelligence if competitor_intelligence else []
+            
+            # Add coaching priorities if available
+            coaching_priorities = analytics.raw_model_response.get("coaching_priorities", [])
+            data["coachingPriorities"] = coaching_priorities if coaching_priorities else []
+            
+            # Add SLA compliance and hold time
+            data["slaCompliance"] = analytics.raw_model_response.get("sla_compliance", 0)
+            data["avgHoldTime"] = analytics.raw_model_response.get("avg_wait_time", 0)
         else:
             data["complianceFlags"] = []
+            data["learningSuggestions"] = ""
+            data["competitorIntelligence"] = []
+            data["coachingPriorities"] = []
+            data["slaCompliance"] = 0
+            data["avgHoldTime"] = 0
         
         # Add validation data if available (Phase 2)
         if analytics.validation_results:
@@ -455,8 +767,75 @@ def get_call_details(call_id):
             data["skillLevel"] = analytics.skill_level or "Novice"
     else:
         data["complianceFlags"] = []
+        data["agentPerformanceMetrics"] = {}
+        data["learningSuggestions"] = ""
+        data["competitorIntelligence"] = []
+        data["coachingPriorities"] = []
+        data["slaCompliance"] = 0
+        data["avgHoldTime"] = 0
     
     return data
+
+
+def _extract_agent_performance_metrics(validation_results):
+    """
+    Extract agent performance metrics from validation results
+    Maps validation scores to required 9 metrics with evidence
+    """
+    if not validation_results or "validation" not in validation_results:
+        return {}
+    
+    validation = validation_results["validation"]
+    
+    metrics = {
+        "greetings": {
+            "score": validation.get("greetings", {}).get("score", 0),
+            "evidence": validation.get("greetings", {}).get("evidence", "No evidence available"),
+            "max": 5
+        },
+        "crmQueryParaphrase": {
+            "score": validation.get("crm_query_paraphrase", {}).get("score", 0), 
+            "evidence": validation.get("crm_query_paraphrase", {}).get("evidence", "No evidence available"),
+            "max": 5
+        },
+        "energyAndClarity": {
+            "score": validation.get("energy_enthusiasm_pace", {}).get("score", 0),
+            "evidence": validation.get("energy_enthusiasm_pace", {}).get("evidence", "No evidence available"), 
+            "max": 5
+        },
+        "activeListening": {
+            "score": validation.get("listening_acknowledgment", {}).get("score", 0),
+            "evidence": validation.get("listening_acknowledgment", {}).get("evidence", "No evidence available"),
+            "max": 5
+        },
+        "grammarAndStructure": {
+            "score": validation.get("grammar_vocabulary", {}).get("score", 0),
+            "evidence": validation.get("grammar_vocabulary", {}).get("evidence", "No evidence available"),
+            "max": 5
+        },
+        "empathyAndApology": {
+            "score": validation.get("apology_empathy", {}).get("score", 0),
+            "evidence": validation.get("apology_empathy", {}).get("evidence", "No evidence available"),
+            "max": 5
+        },
+        "holdProcedure": {
+            "score": validation.get("dead_air_hold_process", {}).get("score", 0),
+            "evidence": validation.get("dead_air_hold_process", {}).get("evidence", "No evidence available"),
+            "max": 6
+        },
+        "probingAndUnderstanding": {
+            "score": validation.get("good_right_probing", {}).get("score", 0),
+            "evidence": validation.get("good_right_probing", {}).get("evidence", "No evidence available"),
+            "max": 12
+        },
+        "correctClosing": {
+            "score": validation.get("correct_closing", {}).get("score", 0),
+            "evidence": validation.get("correct_closing", {}).get("evidence", "No evidence available"),
+            "max": 6
+        }
+    }
+    
+    return metrics
 
 
 def get_call_logs(agent_id=None, start_date=None, end_date=None, page=0, limit=10):
@@ -494,38 +873,6 @@ def get_agent_analytics(agent_id=None, start_date=None, end_date=None):
         "pickup_rate": round(len(answered) / total_calls * 100, 1) if total_calls else 0,
         "answered_calls": len(answered),
     }
-
-
-def chat_about_call(call_id, question):
-    """Answer a question about a completed call"""
-    record = ch.get_record(call_id)
-    if not record:
-        return "I couldn't find this call."
-
-    transcript = load_transcript_from_s3(record.transcript_s3_key) if record.transcript_s3_key else None
-    conversation = format_transcript((transcript or {}).get("messages", []))
-    analytics = ch.get_analytics(call_id)
-    analysis_ctx = json.dumps(analytics.to_dict()) if analytics else "(no analysis available)"
-
-    system = ("You are an assistant answering questions about a single completed support call. "
-              "Use the transcript and analysis provided. Be concise and factual. "
-              "If the answer isn't in the call, say so. Plain text only.")
-    user_text = (f"Call transcript:\n{conversation}\n\n"
-                 f"Existing analysis:\n{analysis_ctx}\n\n"
-                 f"Question: {question}")
-    try:
-        _, bedrock_client = _get_aws_clients()
-        resp = bedrock_client.converse(
-            modelId=PCA_MODEL_ID,
-            system=[{"text": system}],
-            messages=[{"role": "user", "content": [{"text": user_text}]}],
-            inferenceConfig={"maxTokens": 800, "temperature": 0.2},
-        )
-        return resp["output"]["message"]["content"][0]["text"].strip()
-    except Exception as e:
-        print(f"[PCA] chat_about_call failed: {e}")
-        return "Sorry, I couldn't process that right now."
-
 
 
 def delete_call(call_id):
