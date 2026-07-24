@@ -228,25 +228,31 @@ def get_instore_analytics():
         # Sales executive effectiveness leaderboard
         leaderboard = _get_sales_executive_leaderboard(sales_executive_scores)
         
-        # Executive AI summary (top insights)
-        executive_summary = _get_executive_summary(
-            customer_satisfactions,
-            sales_executive_performances,
-            overall_sentiments,
-            len(analytics_map)
-        )
+        # Calculate overall conversion rate (must be before executive_summary)
+        overall_conversion_rate_percentage = (total_products_sold_overall / total_products_discussed_overall * 100) if total_products_discussed_overall > 0 else 0.0
+        overall_conversion_rate_count = f"{total_products_sold_overall}/{total_products_discussed_overall}"
         
         # Coaching priorities (try raw data first, fallback to analysis)
         coaching_priorities = _get_coaching_priorities_from_raw_data(coaching_priorities_all)
         if not coaching_priorities:
             coaching_priorities = _get_coaching_priorities(sales_executive_details, sales_executive_scores)
         
+        # Executive AI summary (top insights)
+        executive_summary = _get_executive_summary(
+            customer_satisfactions,
+            sales_executive_performances,
+            overall_sentiments,
+            len(analytics_map),
+            sla_compliances=sla_compliances,
+            conversion_rate_pct=overall_conversion_rate_percentage if total_products_discussed_overall > 0 else None,
+            top_products=top_products,
+            coaching_priorities=coaching_priorities,
+            total_products_discussed=total_products_discussed_overall,
+            total_products_sold=total_products_sold_overall
+        )
+        
         # AI Quality Scorecard (5 metrics per sales executive)
         quality_scorecard = _get_quality_scorecard(analytics_map, records_map)
-        
-        # Calculate overall conversion rate
-        overall_conversion_rate_percentage = (total_products_sold_overall / total_products_discussed_overall * 100) if total_products_discussed_overall > 0 else 0.0
-        overall_conversion_rate_count = f"{total_products_sold_overall}/{total_products_discussed_overall}"
         
         return {
             'total_uploads': total_uploads,
@@ -484,65 +490,91 @@ def _get_sales_executive_leaderboard(sales_executive_scores):
     return sorted(leaderboard, key=lambda x: x['score'], reverse=True)[:10]
 
 
-def _get_executive_summary(customer_satisfactions, sales_performances, sentiments, total_interactions):
+def _get_executive_summary(customer_satisfactions, sales_performances, sentiments, total_interactions,
+                           sla_compliances=None, conversion_rate_pct=None, top_products=None,
+                           coaching_priorities=None, total_products_discussed=0, total_products_sold=0):
     """Generate executive summary insights using Claude LLM"""
-    
+
     if not sentiments and not customer_satisfactions:
         return []
-    
+
     try:
-        # Prepare data summary for LLM
         avg_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0.0
         negative_count = sum(1 for s in sentiments if s <= 3) if sentiments else 0
         negative_pct = (negative_count / len(sentiments)) * 100 if sentiments else 0.0
         positive_count = sum(1 for s in sentiments if s >= 7) if sentiments else 0
         positive_pct = (positive_count / len(sentiments)) * 100 if sentiments else 0.0
-        
+        neutral_pct = 100.0 - positive_pct - negative_pct
+
         avg_csat = sum(customer_satisfactions) / len(customer_satisfactions) if customer_satisfactions else 0.0
         avg_sales_perf = sum(sales_performances) / len(sales_performances) if sales_performances else 0.0
-        
-        # Create context for LLM
+        avg_sla = sum(sla_compliances) / len(sla_compliances) if sla_compliances else None
+
+        # Top 3 products as a readable string
+        top_products_str = ", ".join(
+            f"{p['product']} ({p['count']} mentions)" for p in (top_products or [])[:3]
+        ) or "N/A"
+
+        # Top coaching issue (highest severity)
+        top_issue = (coaching_priorities or [{}])[0].get('priority', 'N/A') if coaching_priorities else 'N/A'
+        high_severity_count = sum(1 for p in (coaching_priorities or []) if p.get('severity') == 'HIGH')
+
+        sla_line = f"- SLA Compliance: {avg_sla:.1f}% avg" if avg_sla is not None else ""
+        conversion_line = (
+            f"- Product Conversion: {total_products_sold}/{total_products_discussed} products sold ({conversion_rate_pct:.1f}%)"
+            if conversion_rate_pct is not None else ""
+        )
+
         data_context = f"""
-In-Store Sales Interaction Analytics Summary (Last Period):
-- Total Interactions Analyzed: {total_interactions}
-- Average Overall Sentiment: {avg_sentiment}/10
-  * Positive sentiment (≥7): {positive_pct}% of interactions
-  * Negative sentiment (≤3): {negative_pct}% of interactions
-- Average Customer Satisfaction: {avg_csat}/10
-- Average Sales Executive Performance: {avg_sales_perf}/10
+In-Store Sales Analytics — Last Period ({total_interactions} interactions):
 
-Please analyze this data and generate 3-5 concise, actionable business insights for the executive team.
-Each insight should:
-1. Be data-driven and specific (include numbers)
-2. Highlight trends or concerns
-3. Suggest action if needed
-4. Be formatted as a single sentence or short phrase
-5. Focus on business impact (customer satisfaction, sales performance, team effectiveness)
+CUSTOMER EXPERIENCE
+- Sentiment: avg {avg_sentiment:.1f}/10 | Positive: {positive_pct:.1f}% | Neutral: {neutral_pct:.1f}% | Negative: {negative_pct:.1f}%
+- CSAT: {avg_csat:.1f}/10
 
-Return ONLY a JSON array of strings (no markdown, no extra text):
-["insight 1", "insight 2", "insight 3", ...]
+SALES PERFORMANCE
+- Sales Executive Avg Score: {avg_sales_perf:.1f}/10
+{conversion_line}
+
+OPERATIONAL
+{sla_line}
+
+PRODUCT DEMAND
+- Top Discussed Products: {top_products_str}
+
+COMPLIANCE & COACHING
+- Top Coaching Issue: {top_issue}
+- High-Severity Coaching Flags: {high_severity_count}
+
+Generate exactly 5 executive insights, one per section above (Customer Experience, Sales Performance, Operational, Product Demand, Compliance & Coaching).
+Rules:
+- Each insight covers ONLY its assigned section — no overlap
+- Include specific numbers from the data
+- Max 25 words per insight, action-oriented
+- Tone: encouraging and constructive — highlight wins where data is strong, frame gaps as improvement opportunities (avoid words like "poor", "failing", "low", "weak")
+- If a section has no data (N/A), generate a general best-practice recommendation for that area
+
+Return ONLY a JSON array of 5 strings:
+["cx insight", "sales insight", "ops insight", "product insight", "compliance insight"]
 """
-        
+
         bedrock_client = _get_bedrock_client()
         response = bedrock_client.converse(
             modelId=PCA_MODEL_ID,
-            system=[{"text": "You are an in-store sales analytics expert. Analyze metrics and provide executive-level business insights for retail operations."}],
+            system=[{"text": "You are a supportive in-store retail analytics advisor. Generate distinct, data-driven executive insights with a balanced, constructive tone — acknowledge positives, frame concerns as opportunities, and never repeat themes across insights."}],
             messages=[{"role": "user", "content": [{"text": data_context}]}],
             inferenceConfig={"maxTokens": 1024},
         )
-        
+
         output_text = response["output"]["message"]["content"][0]["text"].strip()
-        
-        # Parse JSON array from response
+
         try:
-            # Try direct parse
             insights = json.loads(output_text)
             if isinstance(insights, list):
-                return insights[:5]  # Return max 5 insights
+                return insights[:5]
         except json.JSONDecodeError:
             pass
-        
-        # Try extracting JSON array from text
+
         start = output_text.find("[")
         end = output_text.rfind("]")
         if start != -1 and end != -1 and end > start:
@@ -552,9 +584,9 @@ Return ONLY a JSON array of strings (no markdown, no extra text):
                     return insights[:5]
             except json.JSONDecodeError:
                 pass
-        
+
         return []
-        
+
     except Exception as e:
         print(f"[InStore Analytics] Executive summary generation failed: {e}")
         return []
@@ -595,13 +627,13 @@ def _get_coaching_priorities_from_raw_data(coaching_priorities_all):
         
         # Determine severity based on score
         if avg_score < 5:
-            severity = 'HIGH RISK'
+            severity = 'HIGH'
             severity_rank = 1
         elif avg_score < 7:
-            severity = 'MED RISK'
+            severity = 'MED'
             severity_rank = 2
         else:
-            severity = 'LOW RISK'
+            severity = 'LOW'
             severity_rank = 3
         
         result.append({
